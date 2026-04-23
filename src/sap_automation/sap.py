@@ -1,6 +1,6 @@
-from .client.config import SAPConfig
-from .client.connection import SAPConnection
-from .transactions.ml81n import ML81N
+from sap_automation.client.config import SAPConfig
+from sap_automation.client.connection import SAPConnection
+from sap_automation.transactions.mm import ML81N
 
 
 class SAP:
