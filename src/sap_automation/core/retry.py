@@ -13,7 +13,7 @@ def retry(max_attempts=3, delay=1.0, exceptions=(Exception,)):
                 try:
                     return func(*args, **kwargs)
                 except exceptions as e:
-                    logger.warning(f"[Tentativa {attempt}/{max_attempts}] erro: {e}")
+                    logger.debug(f"[Tentativa {attempt}/{max_attempts}] erro: {e}")
                     if attempt == max_attempts:
                         raise
                     time.sleep(delay)
