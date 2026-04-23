@@ -1,6 +1,6 @@
 [project]
 name = "sap-automation"
-version = "0.1.0"
+version = "0.2.0"
 description = "Biblioteca para automatização de tarefas SAP"
 authors = [{ name = "Adao Oliveira", email = "adaum79@gmail.com" }]
 readme = "README.md"
