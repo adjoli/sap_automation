@@ -1,6 +1,8 @@
 import logging
 import time
 
+from sap_automation.core.retry import retry
+
 
 class SAPSession:
     def __init__(self, session):
@@ -11,6 +13,7 @@ class SAPSession:
     # CORE
     # ----------------------------------
 
+    @retry(max_attempts=3, delay=0.5)
     def find(self, path: str):
         return self._session.findById(path)
 
