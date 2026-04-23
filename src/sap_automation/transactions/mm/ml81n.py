@@ -1,3 +1,4 @@
+from sap_automation.components import TableControl
 from sap_automation.core.logging import get_logger
 from sap_automation.models.frs import FRS, Fiscal
 from sap_automation.transactions.base import Transaction
@@ -50,9 +51,7 @@ class ML81N(Transaction):
 
         # cabeçalho
         data["pedido"] = self.session.get_text("wnd[0]/usr/txtRM11R-BSTNR")
-
         data["texto_breve"] = self.session.get_text("wnd[0]/usr/txtESSR-TXZ01")
-
         data["liberada"] = self._has_acceptance()
 
         # abas
@@ -77,6 +76,7 @@ class ML81N(Transaction):
     def _select_tab(self, tab_id: str):
         self.session.find(tab_id).select()
 
+    # ------------
     def _load_dados_basicos(self, data: dict):
         self._select_tab("wnd[0]/usr/tabsTAB_HEADER/tabpREGG")
 
@@ -92,17 +92,15 @@ class ML81N(Transaction):
             "wnd[0]/usr/tabsTAB_HEADER/tabpREGG/ssubSUB_HEADER:SAPLMLSR:0410/txtESSR-SBNAMAN"
         )
 
+    # ------------
     def _load_valores(self, data: dict):
         self._select_tab("wnd[0]/usr/tabsTAB_HEADER/tabpREGW")
 
         data["valor"] = self.session.get_text(
-            "wnd[0]/usr/tabsTAB_HEADER/tabpREGW/ssubSUB_VALUES:SAPLMLSR:0450/txtESSR-NETWR"
+            "wnd[0]/usr/tabsTAB_HEADER/tabpREGW/ssubSUB_VALUES:SAPLMLSR:0450/txtESSR-LWERT"
         )
 
-    # ----------------------------------
-    # FISCAIS (VERSÃO ESTÁVEL)
-    # ----------------------------------
-
+    # ------------
     def _load_fiscais(self, data: dict):
         self._select_tab("wnd[0]/usr/tabsTAB_HEADER/tabpESCR")
 
@@ -110,21 +108,20 @@ class ML81N(Transaction):
             "wnd[0]/usr/tabsTAB_HEADER/tabpESCR/ssubSUBUSCR:SAPLXMLU:0399/btnBT_GERFIS"
         )
 
-        fiscais = []
-
         try:
-            table = self.session.safe_find(
-                "wnd[1]/usr/tblSAPLZGFMM_GERFISTC_FISCAIS_NB1"
+            table = TableControl(
+                self.session, "wnd[1]/usr/tblSAPLZGFMM_GERFISTC_FISCAIS_NB1"
             )
 
-            for i in range(table.RowCount):
-                chave = table.GetCellValue(i, "Chave")
-                nome = table.GetCellValue(i, "Nome")
-
-                fiscais.append(Fiscal(chave=chave, nome=nome))
+            fiscais = [
+                Fiscal(chave=row.get("Chave"), nome=row.get("Nome"))
+                for row in table.to_list()
+                if row.get("Sel.")  # CheckBox do fiscal está selecionada
+            ]
 
         except Exception as e:
-            self.logger.warning(f"Não foi possível extrair fiscais: {e}")
+            self.logger.warning(f"Erro ao ler fiscais: {e}")
+            fiscais = []
 
         data["fiscais"] = fiscais
 
