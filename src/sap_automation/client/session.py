@@ -1,5 +1,4 @@
 import logging
-import time
 
 from sap_automation.core.retry import retry
 from sap_automation.types import VKEY
@@ -48,8 +47,8 @@ class SAPSession:
         self.find(path).press()
 
     # -------
-    def send_vkey(self, key: int):
-        self.find("wnd[0]").sendVKey(key)
+    def send_vkey(self, key: int, window: str = "wnd[0]"):
+        self.find(f"{window}").sendVKey(key)
 
     # ----------------------------------
     # TRANSAÇÃO
@@ -83,16 +82,3 @@ class SAPSession:
             return self.get_text("wnd[0]/sbar")
         except Exception:
             return ""
-
-    # ----------------------------------
-    # RETRY SIMPLES (ESSENCIAL)
-    # ----------------------------------
-
-    def safe_find(self, path: str, retries=3, delay=0.3):
-        for i in range(retries):
-            try:
-                return self.find(path)
-            except Exception as e:
-                self.logger.warning(f"[Tentativa {i + 1}/{retries}] erro: {e}")
-                time.sleep(delay)
-        raise

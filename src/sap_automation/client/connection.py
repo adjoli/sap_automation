@@ -62,9 +62,11 @@ class SAPConnection:
 
     # ----------------------------------------
     def _resolve_env(self):
-        if self.config.environment == "QAS":
-            return "TEQ - SAP ECC Transpetro QAS"
-        return "F04 - SAP Scripting Transpetro PRD"
+        match self.config.environment:
+            case "QAS":
+                return self.config.sap_conn_name_qas
+            case _:  # default PRD
+                return self.config.sap_conn_name_prd
 
     # ----------------------------------------
     def _login(self, session):

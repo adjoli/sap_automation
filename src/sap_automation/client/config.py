@@ -9,6 +9,8 @@ class SAPConfig:
     user: str
     password: str
     environment: str
+    sap_conn_name_prd: str
+    sap_conn_name_qas: str
     client: str
     language: str
     saplogon_path: str
@@ -27,6 +29,12 @@ class SAPConfig:
             user=os.getenv("SAP_USER"),
             password=password_map.get(env),
             environment=env,
+            sap_conn_name_prd=os.getenv(
+                "SAP_CONN_NAME_PRD", "F04 - SAP Scripting Transpetro PRD"
+            ),
+            sap_conn_name_qas=os.getenv(
+                "SAP_CONN_NAME_QAS", "TEQ - SAP ECC Transpetro QAS"
+            ),
             client=os.getenv("SAP_CLIENT", "400"),
             language=os.getenv("SAP_LANG", "PT"),
             saplogon_path=os.getenv(
