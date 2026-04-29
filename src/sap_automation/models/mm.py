@@ -1,11 +1,13 @@
 from pydantic import BaseModel, field_validator
 
 
+# ===========================================
 class Fiscal(BaseModel):
     chave: str
     nome: str
 
 
+# ===========================================
 class FRS(BaseModel):
     numero: str
     pedido: str | None = None
@@ -47,3 +49,20 @@ class FRS(BaseModel):
 
     def as_json(self) -> str:
         return self.model_dump_json()
+
+
+# ===========================================
+class ML84Item(BaseModel):
+    frs: str
+    aceito: bool
+    pedido: str | None
+    item: str | None
+    centro: str | None
+    fornecedor_num: str | None
+    fornecedor_nome: str | None
+    data_doc: str | None
+    valor_pedido: float
+    data_remessa: str | None
+    texto_breve: str
+    valor: float
+    criado_em: str | None
