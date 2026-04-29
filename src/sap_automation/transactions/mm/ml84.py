@@ -106,8 +106,7 @@ class ML84(Transaction):
         self.logger.info("Iniciando ML84")
         self.session.start_transaction("ML84")
 
-    # def execute(self) -> list[ML84Item]:
-    def execute(self):
+    def execute(self) -> list[ML84Item]:
         self._apply_filters()
         self._apply_status()
         self._run()
@@ -143,5 +142,4 @@ class ML84(Transaction):
 
     # ----------
     def _run(self):
-        # F8
-        self.session.send_vkey(8)
+        self.session.send_vkey(8)  # F8
