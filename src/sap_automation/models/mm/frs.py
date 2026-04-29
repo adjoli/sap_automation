@@ -1,10 +1,6 @@
 from pydantic import BaseModel, field_validator
 
-
-# ===========================================
-class Fiscal(BaseModel):
-    chave: str
-    nome: str
+from .fiscal import Fiscal
 
 
 # ===========================================
