@@ -1,7 +1,7 @@
 from sap_automation.components import TableControl
 from sap_automation.core.logging import get_logger
-from sap_automation.models.frs import FRS, Fiscal
-from sap_automation.transactions.base import Transaction
+from sap_automation.models.mm import FRS, Fiscal
+from sap_automation.transactions import Transaction
 
 
 class ML81N(Transaction):
@@ -17,11 +17,11 @@ class ML81N(Transaction):
     # ----------------------------------
     # API
     # ----------------------------------
+    def start(self):
+        self.logger.info("Iniciando ML81N")
+        self.session.start_transaction("ML81N")
 
     def execute(self) -> FRS:
-        self.logger.info("Iniciando ML81N")
-
-        self.session.start_transaction("ML81N")
         self._load_frs()
 
         data = self._extract_data()
