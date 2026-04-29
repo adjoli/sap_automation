@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 from sap_automation.client.config import SAPConfig
@@ -28,7 +26,6 @@ def test_config_switches_to_qas(monkeypatch):
     assert config.password == "abc"
 
 
-# @pytest.mark.skip
 def test_config_fails_without_password(monkeypatch):
     monkeypatch.setenv("SAP_USER", "user")
     monkeypatch.setenv("SAP_ENV", "PRD")

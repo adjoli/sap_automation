@@ -56,8 +56,6 @@ class MultiSelection:
 
     def include_ranges(self, ranges: list[tuple[str, str]]):
         raise NotImplementedError
-        self._select_tab("include_ranges")
-        self._paste_ranges(ranges)
 
     def exclude_values(self, values: list[str]):
         self._select_tab("exclude_values")
@@ -65,5 +63,3 @@ class MultiSelection:
 
     def exclude_ranges(self, ranges: list[tuple[str, str]]):
         raise NotImplementedError
-        self._select_tab("exclude_ranges")
-        self._paste_ranges(ranges)
