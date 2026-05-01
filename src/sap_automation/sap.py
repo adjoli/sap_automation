@@ -1,6 +1,6 @@
 from sap_automation.client.config import SAPConfig
 from sap_automation.client.connection import SAPConnection
-from sap_automation.transactions.mm import ML81N, ML84
+from sap_automation.transactions.mm import ME23N, ML81N, ML84
 
 
 class SAP:
@@ -25,8 +25,11 @@ class SAP:
             self.sap = sap
 
         # ---------------
+        def me23n(self, pedido: str):
+            return ME23N(self.sap.session, pedido).run()
+
+        # ---------------
         def ml81n(self, frs: str):
-            # return ML81N(self.sap.session, frs).execute()
             return ML81N(self.sap.session, frs).run()
 
         # ---------------
