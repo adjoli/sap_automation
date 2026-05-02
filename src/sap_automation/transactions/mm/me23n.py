@@ -2,6 +2,7 @@ import logging
 
 from sap_automation.components.table import TableControl, validate_by_count
 from sap_automation.models.mm.pedido import ItemPedido, Pedido
+from sap_automation.parsers import parse_me23n_items
 from sap_automation.transactions.base import Transaction
 
 
@@ -34,7 +35,8 @@ class ME23N(Transaction):
         return Pedido(
             numero=self.numero,
             fornecedor=header.get("fornecedor"),
-            valor_total=header.get("valor_total"),
+            data=header.get("data"),
+            valor_total=header.get("valor_total", 0.0),
             itens=itens,
         )
 
@@ -57,14 +59,19 @@ class ME23N(Transaction):
     def _read_header(self):
         data = {}
 
-        try:
-            fornecedor = self.session.get_text(
-                "wnd[0]/usr/subSUB0:SAPLMEGUI:0019/subSUB0:SAPLMEGUI:0030/subSUB1:SAPLMEGUI:1105/ctxtMEPO_TOPLINE-SUPERFIELD"
-            )
-        except Exception:
-            fornecedor = None
+        # try:
+        #     fornecedor = self.session.get_text(
+        #         "wnd[0]/usr/subSUB0:SAPLMEGUI:0019/subSUB0:SAPLMEGUI:0030/subSUB1:SAPLMEGUI:1105/ctxtMEPO_TOPLINE-SUPERFIELD"
+        #     )
+        # except Exception:
+        #     fornecedor = None
 
-        data["fornecedor"] = fornecedor
+        data["fornecedor"] = self.session.get_text(
+            "wnd[0]/usr/subSUB0:SAPLMEGUI:0019/subSUB0:SAPLMEGUI:0030/subSUB1:SAPLMEGUI:1105/ctxtMEPO_TOPLINE-SUPERFIELD"
+        )
+        data["data"] = self.session.get_text(
+            "wnd[0]/usr/subSUB0:SAPLMEGUI:0019/subSUB0:SAPLMEGUI:0030/subSUB1:SAPLMEGUI:1105/ctxtMEPO_TOPLINE-BEDAT"
+        )
 
         return data
 
@@ -80,21 +87,7 @@ class ME23N(Transaction):
 
         rows = table.to_list()
 
-        itens = []
-
-        for row in rows:
-            itens.append(
-                ItemPedido(
-                    item=row.get("Itm"),
-                    material=row.get("Material"),
-                    descricao=row.get("Texto breve"),
-                    quantidade=self._to_float(row.get("Qtd.")),
-                    unidade=row.get("Unid."),
-                    valor=self._to_float(row.get("Valor")),
-                )
-            )
-
-        return itens
+        return parse_me23n_items(rows)
 
     # ----------------------------------
     # HELPERS

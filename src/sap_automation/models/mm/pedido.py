@@ -15,5 +15,6 @@ class ItemPedido(BaseModel):
 class Pedido(BaseModel):
     numero: str
     fornecedor: str | None
+    data: str | None
     valor_total: float | None
     itens: List[ItemPedido]
