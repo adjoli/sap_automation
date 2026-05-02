@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel, field_validator
 
 from .fiscal import Fiscal
@@ -56,9 +58,9 @@ class ML84Item(BaseModel):
     centro: str | None
     fornecedor_num: str | None
     fornecedor_nome: str | None
-    data_doc: str | None
+    data_doc: date | None
     valor_pedido: float
-    data_remessa: str | None
+    data_remessa: date | None
     texto_breve: str
     valor: float
-    criado_em: str | None
+    criado_em: date | None

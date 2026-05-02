@@ -1,6 +1,7 @@
 import logging
 
 from sap_automation.components.table import TableControl, validate_by_count
+from sap_automation.core.converters import parse_sap_date
 from sap_automation.models.mm.pedido import ItemPedido, Pedido
 from sap_automation.parsers import parse_me23n_items
 from sap_automation.transactions.base import Transaction
@@ -59,24 +60,20 @@ class ME23N(Transaction):
     def _read_header(self):
         data = {}
 
-        # try:
-        #     fornecedor = self.session.get_text(
-        #         "wnd[0]/usr/subSUB0:SAPLMEGUI:0019/subSUB0:SAPLMEGUI:0030/subSUB1:SAPLMEGUI:1105/ctxtMEPO_TOPLINE-SUPERFIELD"
-        #     )
-        # except Exception:
-        #     fornecedor = None
-
-        data["fornecedor"] = self.session.get_text(
+        fornecedor = self.session.get_text(
             "wnd[0]/usr/subSUB0:SAPLMEGUI:0019/subSUB0:SAPLMEGUI:0030/subSUB1:SAPLMEGUI:1105/ctxtMEPO_TOPLINE-SUPERFIELD"
         )
-        data["data"] = self.session.get_text(
+        data_pedido = self.session.get_text(
             "wnd[0]/usr/subSUB0:SAPLMEGUI:0019/subSUB0:SAPLMEGUI:0030/subSUB1:SAPLMEGUI:1105/ctxtMEPO_TOPLINE-BEDAT"
         )
+
+        data["fornecedor"] = fornecedor
+        data["data"] = parse_sap_date(data_pedido)
 
         return data
 
     # ----------
-    def _read_items(self):
+    def _read_items(self) -> list[ItemPedido]:
         self.logger.debug("Lendo itens do pedido")
 
         table = TableControl(
@@ -88,15 +85,3 @@ class ME23N(Transaction):
         rows = table.to_list()
 
         return parse_me23n_items(rows)
-
-    # ----------------------------------
-    # HELPERS
-    # ----------------------------------
-    def _to_float(self, value):
-        if not value:
-            return None
-
-        try:
-            return float(value.replace(".", "").replace(",", "."))
-        except Exception:
-            return None

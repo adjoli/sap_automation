@@ -1,8 +1,10 @@
 import re
+from datetime import date
 from typing import List
 
 from bs4 import BeautifulSoup
 
+from sap_automation.core.converters import parse_sap_date
 from sap_automation.models.mm import ML84Item
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -19,10 +21,11 @@ def _parse_valor(text: str) -> float:
     return float(m.group().replace(".", "").replace(",", ".")) if m else 0.0
 
 
-def _parse_data(text: str) -> str | None:
+def _parse_data(text: str) -> date | None:
     """Extrai data no formato DD.MM.YYYY."""
     m = re.search(r"\d{2}\.\d{2}\.\d{4}", text)
-    return m.group() if m else None
+    # return m.group() if m else None
+    return parse_sap_date(m.group()) if m else None
 
 
 # ─── PARSER PRINCIPAL ─────────────────────────────────────────────────────────

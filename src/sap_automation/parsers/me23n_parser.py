@@ -1,3 +1,4 @@
+from sap_automation.core.converters import parse_sap_date, parse_sap_float
 from sap_automation.models.mm.pedido import ItemPedido
 
 
@@ -14,22 +15,9 @@ def get_value(row: dict, *keys):
     return None
 
 
-# ----------
-def to_float(value):
-    if value is None:
-        return None
-
-    try:
-        return float(str(value).replace(".", "").replace(",", "."))
-    except Exception:
-        return None
-
-
 # =================================================
 # PARSER PRINCIPAL
 # =================================================
-
-
 def parse_me23n_items(rows: list[dict]) -> list[ItemPedido]:
     items = []
 
@@ -38,9 +26,12 @@ def parse_me23n_items(rows: list[dict]) -> list[ItemPedido]:
             item=get_value(row, "Item", "Itm"),
             material=get_value(row, "Material"),
             descricao=get_value(row, "Texto breve", "Descrição"),
-            quantidade=to_float(get_value(row, "Qtd.pedido", "Qtd.", "Quantidade")),
+            quantidade=parse_sap_float(
+                get_value(row, "Qtd.pedido", "Qtd.", "Quantidade")
+            ),
+            dt_remessa=parse_sap_date(get_value(row, "Dt.remessa")),
             unidade=get_value(row, "UMP", "Unidade"),
-            valor=to_float(get_value(row, "Preço líq.", "Valor")),
+            valor=parse_sap_float(get_value(row, "Preço líq.", "Valor")),
         )
 
         items.append(item)
