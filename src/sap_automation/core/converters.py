@@ -1,7 +1,9 @@
 from datetime import date, datetime
 
 
-# ---------
+# ---------------------------------------
+# DATAS
+# ---------------------------------------
 def parse_sap_date(value: str | None) -> date | None:
     """
     Converte:
@@ -20,16 +22,6 @@ def parse_sap_date(value: str | None) -> date | None:
         return None
 
 
-def parse_sap_float(value) -> float | None:
-    if not value:
-        return None
-
-    try:
-        return float(value.replace(".", "").replace(",", "."))
-    except Exception:
-        return None
-
-
 # ---------
 def format_sap_date(value: date | None) -> str:
     """
@@ -44,3 +36,16 @@ def format_sap_date(value: date | None) -> str:
         return ""
 
     return value.strftime("%d.%m.%Y")
+
+
+# ---------------------------------------
+# NÚMEROS
+# ---------------------------------------
+def parse_sap_float(value) -> float | None:
+    if not value:
+        return None
+
+    try:
+        return float(value.replace(".", "").replace(",", "."))
+    except Exception:
+        return None

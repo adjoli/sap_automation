@@ -1,5 +1,7 @@
 import logging
+from datetime import date
 
+from sap_automation.core.converters import format_sap_date
 from sap_automation.core.retry import retry
 from sap_automation.types import VKEY
 
@@ -41,6 +43,16 @@ class SAPSession:
     # -------
     def set_radio(self, path: str):
         self.find(path).select()
+
+    # -------
+    def set_date(self, path: str, value: date | None):
+        """
+        Preenche um campo SAP de data.
+
+        Aceita datetime.date e converte
+        automaticamente para formato SAP.
+        """
+        self.set_text(path, format_sap_date(value))
 
     # -------
     def press(self, path: str):
