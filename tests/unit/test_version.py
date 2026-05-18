@@ -13,12 +13,18 @@ Esses testes garantem três coisas:
   3. A versão está acessível pelo caminho público correto (`sap_automation.__version__`
      e `SAP.version`), não apenas internamente.
 
-Por que isso importa?
-----------------------
-Sem esses testes, é possível:
-  - Quebrar a importação de __version__ silenciosamente ao refatorar __init__.py.
-  - Desincronizar a versão exposta pela classe SAP da versão real do pacote.
-  - Publicar uma versão com formato inválido que quebre ferramentas de CI/CD.
+Conceito: pytest-mock vs unittest.mock
+----------------------------------------
+Usamos pytest-mock (fixture `mocker`) em vez de unittest.mock diretamente.
+
+Vantagens práticas:
+  - Patches são revertidos automaticamente ao fim de cada teste, sem
+    necessidade de `with patch(...)` ou `@patch` decorators.
+  - `mocker.patch()` é mais conciso e integra melhor com o relatório do pytest.
+  - `mocker.spy()` permite espionar métodos reais sem substituí-los.
+
+pytest-mock é um wrapper sobre unittest.mock — MagicMock, call, side_effect
+funcionam exatamente igual. O conhecimento é 100% transferível.
 
 Execução:
     pytest tests/unit/test_version.py -v
@@ -26,12 +32,9 @@ Execução:
 
 import re
 
-import pytest
-
 import sap_automation
 from sap_automation.sap import SAP
 
-# Formato semântico: MAJOR.MINOR.PATCH com sufixos opcionais (ex: 1.0.0, 0.2.0, 1.0.0b1)
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+")
 
 
@@ -69,8 +72,8 @@ class TestVersion:
         """
         __version__ deve seguir o formato semântico MAJOR.MINOR.PATCH.
 
-        Exemplo de valores válidos: "0.2.0", "1.0.0", "1.2.3b1"
-        Exemplo de valores inválidos: "v0.2.0", "latest", "dev"
+        Exemplos válidos  : "0.2.0", "1.0.0", "1.2.3b1"
+        Exemplos inválidos: "v0.2.0", "latest", "dev"
 
         Garante que a versão pode ser comparada e parseada por ferramentas
         de empacotamento e CI/CD.
@@ -83,9 +86,6 @@ class TestVersion:
         """
         SAP.version deve retornar o mesmo valor de sap_automation.__version__.
 
-        A classe SAP expõe a versão como propriedade para que código cliente
-        possa verificar a versão sem importar o módulo diretamente.
-
         SAP.version lê direto de importlib.metadata — não depende de __init__
         nem de SAPConnection, então não precisa de mock para ser testado.
         Instanciamos via __new__ para evitar que __init__ tente conectar ao SAP.
@@ -93,24 +93,22 @@ class TestVersion:
         sap = SAP.__new__(SAP)
         assert sap.version == sap_automation.__version__
 
-    def test_version_fallback_quando_pacote_nao_instalado(self, monkeypatch):
+    def test_version_fallback_quando_pacote_nao_instalado(self, mocker):
         """
-        SAP.version deve retornar "0.0.0-dev" quando o pacote não está instalado.
+        SAP.version deve retornar '0.0.0-dev' quando o pacote não está instalado.
 
         Situação típica: rodando direto do repositório sem pip install -e .
-        O fallback evita que PackageNotFoundError quebre o código cliente
-        que apenas quer checar a versão.
 
-        Usamos monkeypatch para simular a ausência do pacote sem precisar
-        desinstalar nada — substituímos version() por uma que lança
-        PackageNotFoundError, exatamente como o importlib faria.
+        mocker.patch() substitui version() por uma função que lança
+        PackageNotFoundError, simulando a ausência do pacote instalado.
+        O patch é revertido automaticamente ao fim do teste.
         """
         from importlib.metadata import PackageNotFoundError
 
-        def version_nao_instalado(name):
-            raise PackageNotFoundError(name)
-
-        monkeypatch.setattr("sap_automation.sap.version", version_nao_instalado)
+        mocker.patch(
+            "sap_automation.sap.version",
+            side_effect=PackageNotFoundError("sap-automation"),
+        )
 
         sap = SAP.__new__(SAP)
         assert sap.version == "0.0.0-dev"
