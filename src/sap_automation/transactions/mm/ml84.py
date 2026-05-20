@@ -86,7 +86,11 @@ class ML84(Transaction):
     # STATUS
     # ----------------------------------
     def status(self, status: ML84Status | str):
-        if isinstance(status, str):
+        # ML84Status é StrEnum — deve ser verificado antes de str,
+        # pois isinstance(ML84Status.ACEITO, str) retorna True
+        if isinstance(status, ML84Status):
+            self._status = status
+        elif isinstance(status, str):
             match value := status.lower():
                 case "aceito" | "accepted":
                     self._status = ML84Status.ACEITO

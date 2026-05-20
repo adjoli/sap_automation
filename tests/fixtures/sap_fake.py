@@ -188,7 +188,9 @@ class FakeTableColumn:
 class FakeTableCell:
     """Simula o retorno de GetCell do GuiTableControl SAP."""
 
-    def __init__(self, text: str = "", is_checkbox: bool = False, selected: bool = False):
+    def __init__(
+        self, text: str = "", is_checkbox: bool = False, selected: bool = False
+    ):
         self.Type = "GuiCheckBox" if is_checkbox else "GuiTextField"
         self.Text = text
         self.Selected = selected
@@ -304,6 +306,7 @@ class FakeSAPSession:
         self.transactions: list[str] = []
         self.vkeys: list[int] = []
         self.home_calls: int = 0
+        self.radios_set: list[str] = []
 
     # ------------------------------------------------------------------
     # REGISTRO DE ELEMENTOS (configuração do cenário de teste)
@@ -383,6 +386,15 @@ class FakeSAPSession:
     def go_home(self):
         """Registra chamada ao Easy Access."""
         self.home_calls += 1
+
+    def set_radio(self, path: str):
+        """
+        Simula a seleção de um radio button pelo path SAP.
+
+        Registra o path em radios_set para que os testes possam verificar
+        qual radio button foi selecionado durante a execução.
+        """
+        self.radios_set.append(path)
 
     def exists(self, path: str) -> bool:
         """
