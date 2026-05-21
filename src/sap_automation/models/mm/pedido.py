@@ -6,17 +6,23 @@ from pydantic import BaseModel
 
 class ItemPedido(BaseModel):
     item: str
-    material: str | None
-    descricao: str | None
-    quantidade: float | None
-    dt_remessa: date | None
-    unidade: str | None
-    valor: float | None
+    material: str | None = None
+    descricao: str | None = None
+    quantidade: float | None = None
+    dt_remessa: date | None = None
+    unidade: str | None = None
+    valor: float | None = None
 
 
 class Pedido(BaseModel):
     numero: str
-    fornecedor: str | None
-    data: date | None
-    valor_total: float | None
-    itens: List[ItemPedido]
+    tipo: str | None = None
+    cod_fornecedor: str | None = None
+    desc_fornecedor: str | None = None
+    data: date | None = None
+    texto_breve: str | None = None
+    grp_comprador: str | None = None
+    status: str | None = None
+    valor_total: float | None = None
+    tlc: str | None = None
+    itens: List[ItemPedido] = []

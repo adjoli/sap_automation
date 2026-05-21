@@ -8,7 +8,11 @@ from sap_automation.transactions.base import Transaction
 class ME23N(Transaction):
     def __init__(self, session, numero: str):
         super().__init__(session)
-        self.numero = numero
+
+        if not numero or not numero.strip():
+            raise ValueError("Número do pedido é obrigatório")
+
+        self.numero = numero.strip()
         self.logger = logging.getLogger("sap.mm.me23n")
 
     # ----------------------------------
@@ -33,9 +37,15 @@ class ME23N(Transaction):
 
         return Pedido(
             numero=self.numero,
-            fornecedor=header.get("fornecedor"),
+            tipo=header.get("tipo"),
+            cod_fornecedor=header.get("cod_fornecedor"),
+            desc_fornecedor=header.get("desc_fornecedor"),
             data=header.get("data"),
-            valor_total=header.get("valor_total", 0.0),
+            texto_breve=header.get("texto_breve"),
+            grp_comprador=header.get("grp_comprador"),
+            status=header.get("liberado"),
+            valor_total=header.get("valor_total"),
+            tlc=header.get("tlc"),
             itens=items,
         )
 

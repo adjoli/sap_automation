@@ -1,7 +1,9 @@
+import re
+
 from sap_automation.components import Section, TableControl, TabStrip
 from sap_automation.components.explorer import SAPExplorer
 from sap_automation.components.table import validate_by_count
-from sap_automation.core.converters import parse_sap_date
+from sap_automation.core.converters import parse_sap_date, parse_sap_float
 from sap_automation.parsers.me23n_parser import parse_me23n_items
 from sap_automation.screens.base import Screen
 
@@ -74,6 +76,25 @@ _HEADER_TAB_MAP = {
     "Estratégia de liberação": "TABHDT12",
     "Detalhes externos": "TABHDT13",
 }
+
+
+def _parse_fornecedor(texto: str | None) -> tuple[str | None, str | None]:
+    """
+    Separa o texto do campo fornecedor em código e descrição.
+
+    O SAP retorna o fornecedor como "<codigo> <nome>", ex:
+        "9000013096 C.HENRIQUE BODEMEIER & CIA LTDA"
+
+    Retorna (cod_fornecedor, desc_fornecedor).
+    Se o texto não começar com dígitos, retorna (None, texto).
+    Se o texto for vazio ou None, retorna (None, None).
+    """
+    if not texto or not texto.strip():
+        return None, None
+    m = re.match(r"^(\d+)\s+(.+)$", texto.strip())
+    if m:
+        return m.group(1), m.group(2).strip()
+    return None, texto.strip()
 
 
 class ME23NScreen(Screen):
@@ -189,21 +210,27 @@ class ME23NScreen(Screen):
         Retorna
         -------
         dict com as chaves:
-            fornecedor  : str | None
-            data        : date | None
-            liberado    : str | None  — texto do campo de status de liberação
-            texto_breve : str | None
-            tlc         : str | None
+            tipo        : str | None  — tipo do documento (ex: "NB", "ZNB")
+            fornecedor  : str | None  — código e nome do fornecedor
+            data        : date | None — data do documento
+            liberado    : str | None  — texto do status de liberação
+            valor_total : float | None
+            texto_breve : str | None  — texto breve do pedido (aba Textos)
+            tlc         : str | None  — tipo de linha de contrato (aba Dados do cliente)
         """
         result = {}
 
         # ── campos do topo (seção fixa — sempre visível) ──────────────────────
         top_explorer = SAPExplorer(self.session.find(_ID_TOPO))
         fields = top_explorer.read_fields(
+            "cmbMEPO_TOPLINE-BSART",  # tipo do pedido
             "MEPO_TOPLINE-SUPERFIELD",  # código + nome do fornecedor
             "ctxtMEPO_TOPLINE-BEDAT",  # data do documento
         )
-        result["fornecedor"] = fields.get("MEPO_TOPLINE-SUPERFIELD")
+        result["tipo"] = (fields.get("cmbMEPO_TOPLINE-BSART") or "").strip() or None
+        cod, desc = _parse_fornecedor(fields.get("MEPO_TOPLINE-SUPERFIELD"))
+        result["cod_fornecedor"] = cod
+        result["desc_fornecedor"] = desc
         result["data"] = parse_sap_date(fields.get("ctxtMEPO_TOPLINE-BEDAT"))
 
         # ── expande seção [0] para revelar o TabStrip do cabeçalho ───────────
@@ -213,13 +240,20 @@ class ME23NScreen(Screen):
 
         # ── aba Status ────────────────────────────────────────────────────────
         tabs.select("Status")
-        fields = tabs.current_explorer().read_fields("MEPO1232-STATUS02")
+        fields = tabs.current_explorer().read_fields(
+            "MEPO1232-STATUS02",  # status de liberação (liberado, bloqueado, etc)
+            "txtMEPO1235-VALUE02",  # valor total do pedido
+        )
         result["liberado"] = fields.get("MEPO1232-STATUS02")
+        result["valor_total"] = parse_sap_float(fields.get("txtMEPO1235-VALUE02"))
 
         # ── aba Textos ────────────────────────────────────────────────────────
         tabs.select("Textos")
         texto_explorer = tabs.current_explorer()
-        texto_node = texto_explorer.find_first(type="GuiTextField")
+        # texto_node = texto_explorer.find_first(type="GuiTextField")
+        texto_node = texto_explorer.find_first(
+            id_contains="cntlTEXT_EDITOR_0101/shellcont/shell"
+        )
         result["texto_breve"] = (
             getattr(texto_node, "Text", None) if texto_node else None
         )
@@ -231,7 +265,9 @@ class ME23NScreen(Screen):
         tlc_tabs = TabStrip.from_path(self.session, _ID_TLC_TAB)
         if tlc_tabs.exists("TLC"):
             tlc_tabs.select("TLC")
-            tlc_node = tlc_tabs.current_explorer().find_first(type="GuiTextField")
+            tlc_node = tlc_tabs.current_explorer().find_first(
+                id_contains="txtEKKO_CI-ZZTPCOD_TLC"
+            )
             result["tlc"] = getattr(tlc_node, "Text", None) if tlc_node else None
         else:
             result["tlc"] = None
