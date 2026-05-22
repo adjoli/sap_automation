@@ -1,5 +1,6 @@
-from sap_automation.components import TableControl
+from sap_automation.components import TableControl, TabStrip
 from sap_automation.core.logging import get_logger
+from sap_automation.exceptions.errors import ConfigError, SAPNotFoundError
 from sap_automation.models.mm import FRS, Fiscal
 from sap_automation.transactions import Transaction
 
@@ -9,10 +10,11 @@ class ML81N(Transaction):
         super().__init__(session)
 
         if not frs:
-            raise ValueError("FRS é obrigatória")
+            raise ConfigError("FRS é obrigatória")
 
         self.frs = frs
         self.logger = get_logger("sap.mm.ml81n", frs=frs)
+        self.tabs = TabStrip(self.session, "wnd[0]/usr/tabsTAB_HEADER")
 
     # ----------------------------------
     # API
@@ -33,19 +35,17 @@ class ML81N(Transaction):
     # ----------------------------------
     # CARREGAMENTO
     # ----------------------------------
-
     def _load_frs(self):
         self.session.press("wnd[0]/tbar[1]/btn[17]")
         self.session.set_text("wnd[1]/usr/ctxtRM11R-LBLNI", self.frs)
         self.session.send_vkey(0)
 
         if self.session.exists("wnd[2]/usr/txtMESSTXT1"):
-            raise ValueError(f"FRS {self.frs} não existe")
+            raise SAPNotFoundError(f"FRS {self.frs} não existe")
 
     # ----------------------------------
     # EXTRAÇÃO
     # ----------------------------------
-
     def _extract_data(self) -> dict:
         data = {"numero": self.frs, "fiscais": []}
 
@@ -72,13 +72,8 @@ class ML81N(Transaction):
     # ----------------------------------
     # ABAS
     # ----------------------------------
-
-    def _select_tab(self, tab_id: str):
-        self.session.find(tab_id).select()
-
-    # ------------
     def _load_dados_basicos(self, data: dict):
-        self._select_tab("wnd[0]/usr/tabsTAB_HEADER/tabpREGG")
+        self.tabs.select("DdsBásicos")
 
         data["categoria"] = self.session.get_text(
             "wnd[0]/usr/tabsTAB_HEADER/tabpREGG/ssubSUB_HEADER:SAPLMLSR:0410/cmbESSR-KNTTP"
@@ -94,7 +89,7 @@ class ML81N(Transaction):
 
     # ------------
     def _load_valores(self, data: dict):
-        self._select_tab("wnd[0]/usr/tabsTAB_HEADER/tabpREGW")
+        self.tabs.select("Vals.")
 
         data["valor"] = self.session.get_text(
             "wnd[0]/usr/tabsTAB_HEADER/tabpREGW/ssubSUB_VALUES:SAPLMLSR:0450/txtESSR-LWERT"
@@ -102,7 +97,7 @@ class ML81N(Transaction):
 
     # ------------
     def _load_fiscais(self, data: dict):
-        self._select_tab("wnd[0]/usr/tabsTAB_HEADER/tabpESCR")
+        self.tabs.select("Dados adic.")
 
         self.session.press(
             "wnd[0]/usr/tabsTAB_HEADER/tabpESCR/ssubSUBUSCR:SAPLXMLU:0399/btnBT_GERFIS"

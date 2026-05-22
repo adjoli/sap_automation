@@ -1,5 +1,6 @@
 import logging
 
+from sap_automation.exceptions.errors import ConfigError
 from sap_automation.models.mm.pedido import Pedido
 from sap_automation.screens.me23n_screen import ME23NScreen
 from sap_automation.transactions.base import Transaction
@@ -10,7 +11,7 @@ class ME23N(Transaction):
         super().__init__(session)
 
         if not numero or not numero.strip():
-            raise ValueError("Número do pedido é obrigatório")
+            raise ConfigError("Número do pedido é obrigatório")
 
         self.numero = numero.strip()
         self.logger = logging.getLogger("sap.mm.me23n")

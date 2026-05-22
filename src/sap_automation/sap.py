@@ -2,7 +2,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from sap_automation.client.config import SAPConfig
 from sap_automation.client.connection import SAPConnection
-from sap_automation.transactions.mm import ME23N, ML81N, ML84
+from sap_automation.transactions.mm import ME23N, ML81N, ML83, ML84
 
 
 class SAP:
@@ -19,7 +19,7 @@ class SAP:
 
         pedido = sap.mm.me23n("4500012345")
         frs    = sap.mm.ml81n("1001904414")
-        lista  = sap.mm.ml84(status="nao_aceito")
+        frs_pdf = sap.mm.ml83(frs=["1001909519"], destino="C:/pdfs/")
     """
 
     def __init__(self, config: SAPConfig):
@@ -68,6 +68,7 @@ class SAP:
         def __init__(self, sap: "SAP"):
             self.sap = sap
 
+        # - - - - - - - - - - - - - - - - -
         def me23n(self, pedido: str):
             """
             Consulta um pedido de compras (ME23N).
@@ -82,6 +83,7 @@ class SAP:
             """
             return ME23N(self.sap.session, pedido).run()
 
+        # - - - - - - - - - - - - - - - - -
         def ml81n(self, frs: str):
             """
             Consulta uma Folha de Registro de Serviços (ML81N).
@@ -96,6 +98,61 @@ class SAP:
             """
             return ML81N(self.sap.session, frs).run()
 
+        # - - - - - - - - - - - - - - - - -
+        def ml83(
+            self,
+            destino: str,
+            frs: list[str] | None = None,
+            cod_aceitacao: list[str] | None = None,
+            pedidos: list[str] | None = None,
+            tipo_documento: list[str] | None = None,
+            fornecedores: list[str] | None = None,
+            data_documento: list[str] | None = None,
+            nome_arquivo=None,
+        ) -> list:
+            """
+            Imprime FRS como PDF (ML83).
+
+            Parâmetros
+            ----------
+            destino        : str — pasta onde os PDFs serão salvos
+            frs            : list[str] | None — números de FRS
+            cod_aceitacao  : list[str] | None — códigos de aceitação
+            pedidos        : list[str] | None — números de pedido
+            tipo_documento : list[str] | None — tipos de documento
+            fornecedores   : list[str] | None — códigos de fornecedor
+            data_documento : list[str] | None — datas de documento
+            nome_arquivo   : Callable[[str], str] | None
+                            Função que recebe o número da FRS e retorna o nome
+                            do arquivo sem extensão. Default: "FRS_{numero_frs}"
+
+            Retorna
+            -------
+            list[Path] — caminhos dos PDFs gerados com sucesso
+            """
+
+            kwargs = {"destino": destino}
+            if nome_arquivo:
+                kwargs["nome_arquivo"] = nome_arquivo
+
+            ml83 = ML83(self.sap.session, **kwargs)
+
+            if frs:
+                ml83.filter_frs(frs)
+            if cod_aceitacao:
+                ml83.filter_cod_aceitacao(cod_aceitacao)
+            if pedidos:
+                ml83.filter_pedidos(pedidos)
+            if tipo_documento:
+                ml83.filter_tipo_documento(tipo_documento)
+            if fornecedores:
+                ml83.filter_fornecedor(fornecedores)
+            if data_documento:
+                ml83.filter_data_documento(data_documento)
+
+            return ml83.run()
+
+        # - - - - - - - - - - - - - - - - -
         def ml84(
             self,
             frs: list[str] | None = None,

@@ -50,6 +50,11 @@ import win32con
 import win32gui
 
 from sap_automation.components import MultiSelection
+from sap_automation.exceptions.errors import (
+    ConfigError,
+    SAPNotFoundError,
+    SAPTimeoutError,
+)
 from sap_automation.transactions.base import Transaction
 
 # ─── Constantes ───────────────────────────────────────────────────────────────
@@ -142,7 +147,7 @@ class ML83(Transaction):
         self.logger = logging.getLogger("sap.mm.ml83")
 
         if not self.destino.exists():
-            raise ValueError(f"Pasta de destino não encontrada: {self.destino}")
+            raise ConfigError(f"Pasta de destino não encontrada: {self.destino}")
 
     # ------------------------------------------------------------------
     # BUILDER — configuração de filtros
@@ -224,8 +229,21 @@ class ML83(Transaction):
 
     # ----------
     def _run(self):
-        """Executa a pesquisa (F8)."""
+        """
+        Executa a pesquisa (F8) e verifica se há resultados.
+
+        Lança
+        -----
+        ValueError se o SAP indicar que nenhum documento foi encontrado.
+        """
         self.session.send_vkey(8)
+
+        status = self.session.get_status_bar()
+        if "não foram encontrados" in status.lower():
+            raise SAPNotFoundError(
+                "Nenhuma FRS encontrada para os filtros informados",
+                sap_message=status,
+            )
 
     # ----------
     def _processar_resultados(self) -> list[Path]:
@@ -457,7 +475,7 @@ class ML83(Transaction):
                 return hwnd
             time.sleep(0.3)
 
-        raise TimeoutError(
+        raise SAPTimeoutError(
             f"Popup {titulo!r} não apareceu após {timeout}s. "
             "Verifique se o SAP abriu a janela de salvamento corretamente."
         )
