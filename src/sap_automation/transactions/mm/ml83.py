@@ -232,43 +232,41 @@ class ML83(Transaction):
         """
         Itera sobre as FRS na tela de resultados e gera o PDF de cada uma.
 
-        Estratégia: seleciona o checkbox (ID fixo wnd[0]/usr/chk[1,6]),
-        clica em "Exibir saída", salva o PDF via popup Windows e volta
-        à tela de resultados (F3) para processar a próxima.
+        Estrutura da GuiUserArea
+        ------------------------
+        A tela de resultados mistura linhas de cabeçalho de pedido (laranja)
+        e linhas de FRS. O padrão observado é:
 
-        Como cada chamada traz uma única FRS (uso recomendado), o loop
-        normalmente executa apenas uma iteração.
+            chk[1,N]  → checkbox de seleção para impressão (coluna 1)
+            lbl[3,N]  → número da FRS correspondente (coluna 3)
+            chk[20,N] → checkbox de aceite — ignorado
+
+        Linhas sem chk[1,N] são cabeçalhos de pedido — ignoradas.
+
+        Estratégia
+        ----------
+        1. Enumera todos os componentes da GuiUserArea via Children
+        2. Filtra checkboxes da coluna 1 (chk[1,N]) — um por FRS
+        3. Para cada um, lê lbl[3,N] para obter o número da FRS
+        4. Seleciona o checkbox, clica em Exibir saída, salva PDF, F3
         """
         arquivos_gerados: list[Path] = []
-        linha = 6  # linha inicial do primeiro resultado na tabela
 
-        while True:
-            # verifica se ainda há FRS na posição atual
+        # mapeia as linhas que contêm FRS imprimíveis
+        frs_por_linha = self._mapear_frs()
+
+        if not frs_por_linha:
+            self.logger.warning("Nenhuma FRS encontrada na tela de resultados")
+            return []
+
+        self.logger.info(
+            f"{len(frs_por_linha)} FRS encontrada(s): {list(frs_por_linha.values())}"
+        )
+
+        for linha, numero_frs in frs_por_linha.items():
+            self.logger.info(f"Processando FRS {numero_frs} (linha {linha})")
+
             chk_path = f"wnd[0]/usr/chk[1,{linha}]"
-            if not self.session.exists(chk_path):
-                self.logger.debug(
-                    f"Nenhum checkbox em linha {linha} — fim dos resultados"
-                )
-                break
-
-            # resolve o número da FRS para nomenclatura do arquivo:
-            # se filter_frs() foi usado, o número já está disponível;
-            # caso contrário (filtro por pedido, fornecedor etc.), lê da tela.
-            numeros_frs = self._filters.get(ML83Filter.FRS, [])
-            if numeros_frs:
-                numero_frs = numeros_frs[0]
-            else:
-                try:
-                    numero_frs = self.session.get_text(
-                        f"wnd[0]/usr/lbl[6,{linha}]"
-                    ).strip()
-                except Exception as e:
-                    self.logger.warning(
-                        f"Linha {linha}: erro ao ler número da FRS — {e}"
-                    )
-                    break
-
-            self.logger.info(f"Processando FRS {numero_frs}")
 
             try:
                 # seleciona o checkbox desta FRS
@@ -294,9 +292,58 @@ class ML83(Transaction):
                 # volta à tela de resultados independente de sucesso ou falha
                 self.session.send_vkey(3)  # F3
 
-            linha += 1
-
         return arquivos_gerados
+
+    def _mapear_frs(self) -> dict[int, str]:
+        """
+        Enumera a GuiUserArea e retorna um dicionário {linha: numero_frs}
+        para todas as FRS imprimíveis encontradas na tela de resultados.
+
+        Lógica
+        ------
+        Itera pelos filhos da GuiUserArea buscando elementos cujo ID
+        corresponde ao padrão chk[1,N] (checkbox de seleção, coluna 1).
+        Para cada um, lê lbl[3,N] na mesma linha N para obter o número
+        da FRS. Checkboxes na coluna 20 (aceite) são ignorados.
+
+        Retorna dict ordenado por linha para garantir processamento sequencial.
+        """
+        import re
+
+        usr = self.session.find("wnd[0]/usr")
+        resultado: dict[int, str] = {}
+
+        try:
+            children = usr.Children
+        except Exception as e:
+            self.logger.warning(f"Erro ao acessar filhos da GuiUserArea: {e}")
+            return resultado
+
+        for i in range(children.Count):
+            try:
+                child = children.ElementAt(i)
+                child_id = child.Id
+
+                # busca por chk[1,N] — checkbox de seleção (coluna 1)
+                m = re.search(r"chk\[1,(\d+)\]", child_id)
+                if not m:
+                    continue
+
+                linha = int(m.group(1))
+
+                # lê o número da FRS em lbl[3,N] — mesma linha, coluna 3
+                lbl_path = f"wnd[0]/usr/lbl[3,{linha}]"
+                numero_frs = self.session.get_text(lbl_path).strip()
+
+                if numero_frs:
+                    resultado[linha] = numero_frs
+                    self.logger.debug(f"FRS mapeada: linha={linha} numero={numero_frs}")
+
+            except Exception as e:
+                self.logger.debug(f"Elemento {i} ignorado: {e}")
+                continue
+
+        return dict(sorted(resultado.items()))
 
     def _ler_numero_frs(self, linha: int) -> str:
         """
