@@ -58,7 +58,7 @@ _TITULO_POPUP_WINDOWS = "Salvar Saída de Impressão como"
 _PATH_CHECKBOX = "wnd[0]/usr/chk[1,6]"
 _PATH_BTN_EXIBIR = "wnd[0]/tbar[1]/btn[17]"
 _PATH_BTN_IMPRIMIR = "wnd[0]/tbar[0]/btn[86]"
-_TIMEOUT_POPUP = 5  # segundos aguardando o popup Windows aparecer
+_TIMEOUT_POPUP = 10  # segundos aguardando o popup Windows aparecer
 _DELAY_APOS_SALVAR = 1.0  # segundos aguardando o SAP processar o salvamento
 
 
@@ -298,12 +298,35 @@ class ML83(Transaction):
 
         return arquivos_gerados
 
+    def _ler_numero_frs(self, linha: int) -> str:
+        """
+        Lê o número da FRS na linha informada.
+
+        Na tela de resultados da ML83, o número da FRS está em uma
+        GuiLabel na coluna 6 da linha correspondente.
+        """
+        path = f"wnd[0]/usr/lbl[6,{linha}]"
+        return self.session.get_text(path).strip()
+
     def _salvar_popup_windows(self, caminho_completo: str):
         """
         Interage com o popup nativo do Windows "Salvar Saída de Impressão como".
 
         Usa pywin32 (win32gui) para localizar a janela pelo título,
         preencher o campo de nome do arquivo e confirmar o salvamento.
+
+        Estrutura do popup (mapeada via EnumChildWindows):
+            FloatNotifySink
+              └── ComboBox
+                    └── Edit  ← campo de nome do arquivo
+            Button text='Sa&lvar'  ← filho direto do popup
+
+        O campo Edit fica aninhado dentro de ComboBox → FloatNotifySink,
+        portanto FindWindowEx direto no popup não o encontra.
+        É necessário descer até o ComboBox primeiro.
+
+        O botão Salvar tem texto 'Sa&lvar' (com ampersand de atalho de teclado),
+        por isso _find_button busca por substring case-insensitive sem '&'.
 
         Parâmetros
         ----------
@@ -320,23 +343,13 @@ class ML83(Transaction):
         # aguarda o popup aparecer
         hwnd = self._aguardar_janela(_TITULO_POPUP_WINDOWS, _TIMEOUT_POPUP)
 
-        # = = = = = = = = = = = = = = = = = = =
-        # TEMPORARIO
-        def _dump_children(hwnd, level=0):
-            def callback(h, _):
-                classe = win32gui.GetClassName(h)
-                texto = win32gui.GetWindowText(h)
-                print("  " * level + f"hwnd={h} class={classe!r} text={texto!r}")
-                _dump_children(h, level + 1)
+        # localiza o ComboBox que contém o campo de nome do arquivo
+        # (FloatNotifySink → ComboBox → Edit)
+        hwnd_combo = win32gui.FindWindowEx(hwnd, None, "ComboBox", None)
+        if not hwnd_combo:
+            raise RuntimeError("ComboBox não encontrado no popup de salvamento")
 
-            win32gui.EnumChildWindows(hwnd, callback, None)
-
-        print(f"=== Popup hwnd={hwnd} ===")
-        _dump_children(hwnd)
-        # = = = = = = = = = = = = = = = = = = =
-
-        # localiza o campo de nome do arquivo (Edit class dentro do popup)
-        hwnd_edit = win32gui.FindWindowEx(hwnd, None, "Edit", None)
+        hwnd_edit = win32gui.FindWindowEx(hwnd_combo, None, "Edit", None)
         if not hwnd_edit:
             raise RuntimeError("Campo de nome não encontrado no popup de salvamento")
 
@@ -344,8 +357,8 @@ class ML83(Transaction):
         win32gui.SendMessage(hwnd_edit, win32con.WM_SETTEXT, 0, caminho_completo)
         self.logger.debug(f"Caminho preenchido: {caminho_completo}")
 
-        # localiza e clica no botão "Salvar"
-        hwnd_salvar = self._find_button(hwnd, "Salvar")
+        # localiza e clica no botão "Salvar" (texto real: 'Sa&lvar')
+        hwnd_salvar = self._find_button(hwnd, "lvar")
         if not hwnd_salvar:
             raise RuntimeError("Botão 'Salvar' não encontrado no popup de salvamento")
 
