@@ -312,21 +312,16 @@ class ML83(Transaction):
         """
         Interage com o popup nativo do Windows "Salvar Saída de Impressão como".
 
-        Usa pywin32 (win32gui) para localizar a janela pelo título,
-        preencher o campo de nome do arquivo e confirmar o salvamento.
+        Estratégia: em vez de navegar pela hierarquia de handles (frágil para
+        diálogos modernos do Windows), traz o popup para frente e usa
+        SendKeys para digitar o caminho e confirmar com Enter.
 
-        Estrutura do popup (mapeada via EnumChildWindows):
-            FloatNotifySink
-              └── ComboBox
-                    └── Edit  ← campo de nome do arquivo
-            Button text='Sa&lvar'  ← filho direto do popup
-
-        O campo Edit fica aninhado dentro de ComboBox → FloatNotifySink,
-        portanto FindWindowEx direto no popup não o encontra.
-        É necessário descer até o ComboBox primeiro.
-
-        O botão Salvar tem texto 'Sa&lvar' (com ampersand de atalho de teclado),
-        por isso _find_button busca por substring case-insensitive sem '&'.
+        Fluxo:
+            1. Aguarda o popup aparecer
+            2. Traz para frente (SetForegroundWindow)
+            3. Abre o campo de nome com Ctrl+L (atalho universal do Explorer)
+            4. Digita o caminho completo
+            5. Confirma com Enter (salva o arquivo)
 
         Parâmetros
         ----------
@@ -336,37 +331,69 @@ class ML83(Transaction):
         Lança
         -----
         TimeoutError se o popup não aparecer dentro de _TIMEOUT_POPUP segundos.
-        RuntimeError se o campo de nome ou o botão Salvar não forem encontrados.
         """
+        import win32api
+        import win32process
+
         self.logger.debug(f"Aguardando popup Windows: {_TITULO_POPUP_WINDOWS!r}")
 
-        # aguarda o popup aparecer
         hwnd = self._aguardar_janela(_TITULO_POPUP_WINDOWS, _TIMEOUT_POPUP)
 
-        # localiza o ComboBox que contém o campo de nome do arquivo
-        # (FloatNotifySink → ComboBox → Edit)
-        hwnd_combo = win32gui.FindWindowEx(hwnd, None, "ComboBox", None)
-        if not hwnd_combo:
-            raise RuntimeError("ComboBox não encontrado no popup de salvamento")
+        # traz o popup para frente — necessário para SendKeys funcionar
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+        time.sleep(0.3)
 
-        hwnd_edit = win32gui.FindWindowEx(hwnd_combo, None, "Edit", None)
-        if not hwnd_edit:
-            raise RuntimeError("Campo de nome não encontrado no popup de salvamento")
+        # usa SendMessage com WM_SETTEXT diretamente no Edit dentro do ComboBox
+        # o ComboBox de nome do arquivo é o último Edit da hierarquia do popup
+        hwnd_edit = self._find_edit_recursivo(hwnd)
+        if hwnd_edit:
+            # abordagem 1: WM_SETTEXT direto no Edit (sem focar o campo)
+            win32gui.SendMessage(hwnd_edit, win32con.WM_SETTEXT, 0, caminho_completo)
+            self.logger.debug(f"Caminho preenchido via WM_SETTEXT: {caminho_completo}")
+        else:
+            # abordagem 2: fallback via teclado — seleciona tudo e digita
+            self.logger.debug("Edit não encontrado — usando fallback via teclado")
+            import win32clipboard
 
-        # preenche o caminho completo
-        win32gui.SendMessage(hwnd_edit, win32con.WM_SETTEXT, 0, caminho_completo)
-        self.logger.debug(f"Caminho preenchido: {caminho_completo}")
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(caminho_completo)
+            win32clipboard.CloseClipboard()
 
-        # localiza e clica no botão "Salvar" (texto real: 'Sa&lvar')
-        hwnd_salvar = self._find_button(hwnd, "lvar")
-        if not hwnd_salvar:
-            raise RuntimeError("Botão 'Salvar' não encontrado no popup de salvamento")
+            # Ctrl+A para selecionar texto existente, Ctrl+V para colar
+            win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+            win32api.keybd_event(ord("A"), 0, 0, 0)
+            win32api.keybd_event(ord("A"), 0, win32con.KEYEVENTF_KEYUP, 0)
+            win32api.keybd_event(ord("V"), 0, 0, 0)
+            win32api.keybd_event(ord("V"), 0, win32con.KEYEVENTF_KEYUP, 0)
+            win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+            time.sleep(0.2)
 
-        win32gui.SendMessage(hwnd_salvar, win32con.BM_CLICK, 0, 0)
-        self.logger.debug("Botão Salvar clicado")
+        # confirma com Enter — equivale a clicar em Salvar
+        win32api.keybd_event(win32con.VK_RETURN, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
+        self.logger.debug("Enter enviado — salvamento confirmado")
 
         # aguarda o SAP processar o salvamento antes de continuar
         time.sleep(_DELAY_APOS_SALVAR)
+
+    def _find_edit_recursivo(self, hwnd_pai: int) -> int | None:
+        """
+        Busca recursivamente o primeiro campo Edit dentro de uma janela.
+
+        Necessário porque o campo de nome do arquivo no diálogo moderno
+        do Windows fica aninhado em múltiplos níveis (ComboBox dentro de
+        FloatNotifySink), não como filho direto do popup.
+        """
+        resultado = []
+
+        def callback(hwnd, _):
+            if win32gui.GetClassName(hwnd) == "Edit":
+                resultado.append(hwnd)
+
+        win32gui.EnumChildWindows(hwnd_pai, callback, None)
+        return resultado[0] if resultado else None
 
     def _aguardar_janela(self, titulo: str, timeout: float) -> int:
         """
