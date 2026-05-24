@@ -36,6 +36,7 @@ import win32con
 import win32gui
 
 from sap_automation.components import MultiSelection
+from sap_automation.core.types import ReadMode
 from sap_automation.exceptions.errors import (
     ConfigError,
     SAPNotFoundError,
@@ -298,7 +299,7 @@ class ML83(Transaction):
         for numero in numeros:
             try:
                 self.logger.debug(f"Carregando dados da FRS {numero} via ML81N")
-                dados[numero] = ML81N(self.session, numero).run()
+                dados[numero] = ML81N(self.session, numero, mode=ReadMode.SHALLOW).run()
             except Exception as e:
                 self.logger.warning(f"Erro ao carregar FRS {numero} via ML81N: {e}")
                 dados[numero] = None

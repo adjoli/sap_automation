@@ -1,5 +1,6 @@
 import logging
 
+from sap_automation.core.types import ReadMode
 from sap_automation.exceptions.errors import ConfigError
 from sap_automation.models.mm.pedido import Pedido
 from sap_automation.screens.me23n_screen import ME23NScreen
@@ -7,13 +8,24 @@ from sap_automation.transactions.base import Transaction
 
 
 class ME23N(Transaction):
-    def __init__(self, session, numero: str):
+    def __init__(self, session, numero: str, mode: ReadMode = ReadMode.DEEP):
+        """
+        Parâmetros
+        ----------
+        session : SAPSession
+        numero  : str — número do pedido
+        mode    : ReadMode — profundidade da extração (padrão: DEEP)
+
+        ReadMode.SHALLOW — apenas cabeçalho (status, liberado, texto_breve, tlc)
+        ReadMode.DEEP    — cabeçalho + todos os itens + histórico de pagamento
+        """
         super().__init__(session)
 
         if not numero or not numero.strip():
             raise ConfigError("Número do pedido é obrigatório")
 
         self.numero = numero.strip()
+        self.mode = mode
         self.logger = logging.getLogger("sap.mm.me23n")
 
     # ----------------------------------

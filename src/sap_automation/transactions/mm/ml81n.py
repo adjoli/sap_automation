@@ -1,40 +1,63 @@
 from sap_automation.components import TableControl, TabStrip
 from sap_automation.core.logging import get_logger
+from sap_automation.core.types import ReadMode
 from sap_automation.exceptions.errors import ConfigError, SAPNotFoundError
 from sap_automation.models.mm import FRS, Fiscal
 from sap_automation.transactions import Transaction
 
 
 class ML81N(Transaction):
-    def __init__(self, session, frs: str):
+    """
+    Transação ML81N — Consulta de Folha de Registro de Serviços.
+
+    Modos de leitura
+    ----------------
+    ReadMode.DEEP (padrão)
+        Extração completa: cabeçalho + DdsBásicos + Vals. + fiscais.
+
+    ReadMode.SHALLOW
+        Extração rasa: cabeçalho + DdsBásicos apenas.
+        Pula Vals. e fiscais — ~5s mais rápido por FRS.
+        Use quando só municipio, UF e categoria são necessários
+        (ex: nomenclatura de arquivos na ML83).
+    """
+
+    def __init__(self, session, frs: str, mode: ReadMode = ReadMode.DEEP):
+        """
+        Parâmetros
+        ----------
+        session : SAPSession
+        frs     : str — número da FRS
+        mode    : ReadMode — profundidade da extração (padrão: DEEP)
+        """
         super().__init__(session)
 
         if not frs:
             raise ConfigError("FRS é obrigatória")
 
         self.frs = frs
+        self.mode = mode
         self.logger = get_logger("sap.mm.ml81n", frs=frs)
         self.tabs = TabStrip(self.session, "wnd[0]/usr/tabsTAB_HEADER")
 
     # ----------------------------------
     # API
     # ----------------------------------
+
     def start(self):
-        self.logger.info("Iniciando ML81N")
+        self.logger.info(f"Iniciando ML81N [mode={self.mode}]")
         self.session.start_transaction("ML81N")
 
     def execute(self) -> FRS:
         self._load_frs()
-
         data = self._extract_data()
-
         self.logger.info("ML81N finalizada com sucesso")
-
         return FRS(**data)
 
     # ----------------------------------
     # CARREGAMENTO
     # ----------------------------------
+
     def _load_frs(self):
         self.session.press("wnd[0]/tbar[1]/btn[17]")
         self.session.set_text("wnd[1]/usr/ctxtRM11R-LBLNI", self.frs)
@@ -46,19 +69,25 @@ class ML81N(Transaction):
     # ----------------------------------
     # EXTRAÇÃO
     # ----------------------------------
+
     def _extract_data(self) -> dict:
         data = {"numero": self.frs, "fiscais": []}
 
-        # cabeçalho
+        # cabeçalho — sempre lido em ambos os modos
         data["pedido"] = self.session.get_text("wnd[0]/usr/txtRM11R-BSTNR")
         data["item_pedido"] = self.session.get_text("wnd[0]/usr/txtRM11R-BSTPO")
         data["texto_breve"] = self.session.get_text("wnd[0]/usr/txtESSR-TXZ01")
         data["liberada"] = self._has_acceptance()
 
-        # abas
+        # aba DdsBásicos — sempre lida em ambos os modos
         self._load_dados_basicos(data)
-        self._load_valores(data)
-        self._load_fiscais(data)
+
+        if self.mode == ReadMode.DEEP:
+            # abas adicionais — apenas no modo completo
+            self._load_valores(data)
+            self._load_fiscais(data)
+        else:
+            self.logger.debug("Modo SHALLOW — pulando Vals. e fiscais")
 
         return data
 
@@ -73,7 +102,12 @@ class ML81N(Transaction):
     # ----------------------------------
     # ABAS
     # ----------------------------------
+
     def _load_dados_basicos(self, data: dict):
+        """
+        Lida em ambos os modos (SHALLOW e DEEP).
+        Contém municipio e UF — necessários para nomenclatura na ML83.
+        """
         self.tabs.select("DdsBásicos")
 
         data["categoria"] = self.session.get_text(
@@ -100,16 +134,16 @@ class ML81N(Transaction):
             "wnd[0]/usr/tabsTAB_HEADER/tabpREGG/ssubSUB_HEADER:SAPLMLSR:0410/txtESSR-SBNAMAN"
         )
 
-    # ------------
     def _load_valores(self, data: dict):
+        """Lida apenas no modo DEEP."""
         self.tabs.select("Vals.")
 
         data["valor"] = self.session.get_text(
             "wnd[0]/usr/tabsTAB_HEADER/tabpREGW/ssubSUB_VALUES:SAPLMLSR:0450/txtESSR-LWERT"
         )
 
-    # ------------
     def _load_fiscais(self, data: dict):
+        """Lida apenas no modo DEEP."""
         self.tabs.select("Dados adic.")
 
         self.session.press(
@@ -124,7 +158,7 @@ class ML81N(Transaction):
             fiscais = [
                 Fiscal(chave=row.get("Chave"), nome=row.get("Nome"))
                 for row in table.to_list()
-                if row.get("Sel.")  # CheckBox do fiscal está selecionada
+                if row.get("Sel.")
             ]
 
         except Exception as e:
@@ -133,6 +167,5 @@ class ML81N(Transaction):
 
         data["fiscais"] = fiscais
 
-        # fechar popup
         if self.session.exists("wnd[1]"):
             self.session.find("wnd[1]").close()

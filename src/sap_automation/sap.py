@@ -3,6 +3,7 @@ from pathlib import Path
 
 from sap_automation.client.config import SAPConfig
 from sap_automation.client.connection import SAPConnection
+from sap_automation.core.types import ReadMode
 from sap_automation.models.mm.frs import ML84Item
 from sap_automation.transactions.mm import ME23N, ML81N, ML83, ML84
 
@@ -71,34 +72,38 @@ class SAP:
             self.sap = sap
 
         # - - - - - - - - - - - - - - - - -
-        def me23n(self, pedido: str) -> ME23N:
+        def me23n(self, pedido: str, mode: ReadMode = ReadMode.DEEP) -> ME23N:
             """
             Consulta um pedido de compras (ME23N).
 
             Parâmetros
             ----------
-            pedido : str — número do pedido (ex: "4500012345")
+            pedido : str      — número do pedido (ex: "4500012345")
+            mode   : ReadMode — DEEP (padrão): cabeçalho + itens + histórico
+                                SHALLOW: apenas cabeçalho
 
             Retorna
             -------
             Pedido
             """
-            return ME23N(self.sap.session, pedido).run()
+            return ME23N(self.sap.session, pedido, mode=mode).run()
 
         # - - - - - - - - - - - - - - - - -
-        def ml81n(self, frs: str) -> ML81N:
+        def ml81n(self, frs: str, mode: ReadMode = ReadMode.DEEP) -> ML81N:
             """
             Consulta uma Folha de Registro de Serviços (ML81N).
 
             Parâmetros
             ----------
-            frs : str — número da FRS (ex: "1001904414")
+            frs  : str      — número da FRS (ex: "1001904414")
+            mode : ReadMode — DEEP (padrão): extração completa
+                              SHALLOW: cabeçalho + DdsBásicos (municipio, UF)
 
             Retorna
             -------
             FRS
             """
-            return ML81N(self.sap.session, frs).run()
+            return ML81N(self.sap.session, frs, mode=mode).run()
 
         # - - - - - - - - - - - - - - - - -
         def ml83(
