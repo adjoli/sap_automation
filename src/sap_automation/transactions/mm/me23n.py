@@ -32,7 +32,7 @@ class ME23N(Transaction):
     # START
     # ----------------------------------
     def start(self):
-        self.logger.info("Iniciando ME23N")
+        self.logger.info(f"Iniciando ME23N [mode={self.mode}]")
         self.session.start_transaction("ME23N")
 
     # ----------------------------------
