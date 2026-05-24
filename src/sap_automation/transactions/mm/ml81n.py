@@ -51,6 +51,7 @@ class ML81N(Transaction):
 
         # cabeçalho
         data["pedido"] = self.session.get_text("wnd[0]/usr/txtRM11R-BSTNR")
+        data["item_pedido"] = self.session.get_text("wnd[0]/usr/txtRM11R-BSTPO")
         data["texto_breve"] = self.session.get_text("wnd[0]/usr/txtESSR-TXZ01")
         data["liberada"] = self._has_acceptance()
 
@@ -78,6 +79,18 @@ class ML81N(Transaction):
         data["categoria"] = self.session.get_text(
             "wnd[0]/usr/tabsTAB_HEADER/tabpREGG/ssubSUB_HEADER:SAPLMLSR:0410/cmbESSR-KNTTP"
         ).strip()
+
+        data["local_prest_servico"] = self.session.get_text(
+            "wnd[0]/usr/tabsTAB_HEADER/tabpREGG/ssubSUB_HEADER:SAPLMLSR:0410/ctxtESSR-DLORT"
+        )
+
+        data["municipio"] = self.session.get_text(
+            "wnd[0]/usr/tabsTAB_HEADER/tabpREGG/ssubSUB_HEADER:SAPLMLSR:0410/txtCITYNAME"
+        ).title()
+
+        data["UF"] = self.session.get_text(
+            "wnd[0]/usr/tabsTAB_HEADER/tabpREGG/ssubSUB_HEADER:SAPLMLSR:0410/txtREGIAO"
+        ).upper()
 
         data["resp_interno"] = self.session.get_text(
             "wnd[0]/usr/tabsTAB_HEADER/tabpREGG/ssubSUB_HEADER:SAPLMLSR:0410/txtESSR-SBNAMAG"

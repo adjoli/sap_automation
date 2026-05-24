@@ -1,7 +1,9 @@
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 from sap_automation.client.config import SAPConfig
 from sap_automation.client.connection import SAPConnection
+from sap_automation.models.mm.frs import ML84Item
 from sap_automation.transactions.mm import ME23N, ML81N, ML83, ML84
 
 
@@ -69,7 +71,7 @@ class SAP:
             self.sap = sap
 
         # - - - - - - - - - - - - - - - - -
-        def me23n(self, pedido: str):
+        def me23n(self, pedido: str) -> ME23N:
             """
             Consulta um pedido de compras (ME23N).
 
@@ -84,7 +86,7 @@ class SAP:
             return ME23N(self.sap.session, pedido).run()
 
         # - - - - - - - - - - - - - - - - -
-        def ml81n(self, frs: str):
+        def ml81n(self, frs: str) -> ML81N:
             """
             Consulta uma Folha de Registro de Serviços (ML81N).
 
@@ -109,7 +111,7 @@ class SAP:
             fornecedores: list[str] | None = None,
             data_documento: list[str] | None = None,
             nome_arquivo=None,
-        ) -> list:
+        ) -> list[Path]:
             """
             Imprime FRS como PDF (ML83).
 
@@ -161,7 +163,7 @@ class SAP:
             req_compras: list[str] | None = None,
             centros: list[str] | None = None,
             status: str = "tudo",
-        ) -> list:
+        ) -> list[ML84Item]:
             """
             Lista Folhas de Registro de Serviços com filtros (ML84).
 

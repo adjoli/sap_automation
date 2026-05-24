@@ -9,8 +9,12 @@ from .fiscal import Fiscal
 class FRS(BaseModel):
     numero: str
     pedido: str | None = None
+    item_pedido: int | None = None
     texto_breve: str | None = None
     categoria: str | None = None
+    local_prest_servico: str | None = None
+    municipio: str | None = None
+    UF: str | None = None
     liberada: bool = False
     resp_interno: str | None = None
     resp_externo: str | None = None
