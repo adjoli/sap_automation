@@ -1,46 +1,32 @@
 """
 Transação ML83 — Impressão de Folha de Registro de Serviços
 
-Fluxo de execução (por FRS)
-----------------------------
+Fluxo de execução
+------------------
 1. Aplica filtros na tela de seleção (padrão Builder, igual à ML84)
 2. Executa a pesquisa (F8) — tela de resultados exibe a lista de FRS
-3. Seleciona o checkbox da FRS (ID fixo: wnd[0]/usr/chk[1,6])
-4. Clica em "Exibir saída" (btn[17])
-5. Na tela de visualização, clica em "Imprimir" (btn[14])
-6. O Windows abre o popup "Salvar Saída de Impressão como"
-7. pywin32 localiza o popup pelo título, preenche o caminho e confirma
-8. Volta à tela de resultados (F3)
+3. Mapeia as FRS disponíveis via _mapear_frs() (lê chk[1,N] e lbl[3,N])
+4. Pré-carrega dados de cada FRS via ML81N (município, UF)
+5. Para cada FRS: seleciona checkbox, clica Exibir saída, clica Imprimir,
+   salva PDF via popup Windows, volta à tela de resultados (F3)
 
 Nomenclatura de arquivos
 ------------------------
-O nome do arquivo é controlado por um callable `nome_arquivo`:
-    Callable[[str], str]  — recebe o número da FRS, retorna o nome sem extensão
+Por padrão usa município e UF obtidos da ML81N:
+    FRS_{numero}_{municipio}_{UF}.pdf
 
-Isso mantém a biblioteca desacoplada de qualquer lógica de negócio específica
-(municípios, datas, prefixos). O chamador injeta a função que quiser:
+Pode ser customizado via callable nome_arquivo(numero_frs, frs_data):
+    def nome(numero, frs): return f"FRS_{numero}_{frs.texto_breve}"
+    ML83(session, destino="C:/pdfs/", nome_arquivo=nome)
 
-    # padrão (sem informação adicional)
-    sap.mm.ml83(frs=["1001909519"], destino="C:/pdfs/")
-    # → FRS_1001909519.pdf
-
-    # com município vindo de fonte externa
-    def nome(numero): return f"FRS_{numero}_{minha_base[numero]['municipio']}"
-    sap.mm.ml83(frs=["1001909519"], destino="C:/pdfs/", nome_arquivo=nome)
-    # → FRS_1001909519_IPOJUCA.pdf
-
-    # com município vindo da ML81N
-    def nome(numero): return f"FRS_{numero}_{sap.mm.ml81n(numero).municipio}"
-    sap.mm.ml83(frs=["1001909519"], destino="C:/pdfs/", nome_arquivo=nome)
-
-TODO: implementar modo de impressão em lote (múltiplas FRS por execução).
-      Atualmente a transação é chamada uma vez por FRS para garantir o ID
-      fixo do checkbox (wnd[0]/usr/chk[1,6]). Em lote, os checkboxes variam
-      de posição conforme a linha, exigindo lógica de mapeamento dinâmico
-      da GuiUserArea (GuiLabel + GuiCheckbox filhos).
+TODO: implementar modo de impressão em lote sem ML81N.
+      Atualmente cada FRS é processada individualmente para garantir o ID
+      fixo do checkbox (wnd[0]/usr/chk[1,6]). Em lote com checkboxes
+      dinâmicos, seria necessário mapear a GuiUserArea (GuiLabel + GuiCheckbox).
 """
 
 import logging
+import re
 import time
 from enum import StrEnum
 from pathlib import Path
@@ -60,15 +46,22 @@ from sap_automation.transactions.base import Transaction
 # ─── Constantes ───────────────────────────────────────────────────────────────
 
 _TITULO_POPUP_WINDOWS = "Salvar Saída de Impressão como"
-_PATH_CHECKBOX = "wnd[0]/usr/chk[1,6]"
 _PATH_BTN_EXIBIR = "wnd[0]/tbar[1]/btn[17]"
 _PATH_BTN_IMPRIMIR = "wnd[0]/tbar[0]/btn[86]"
-_TIMEOUT_POPUP = 10  # segundos aguardando o popup Windows aparecer
-_DELAY_APOS_SALVAR = 1.0  # segundos aguardando o SAP processar o salvamento
+_TIMEOUT_POPUP = 15  # segundos aguardando o popup Windows aparecer
+_DELAY_APOS_SALVAR = 2.0  # segundos aguardando SAP processar o salvamento
 
 
-def _nome_padrao(numero_frs: str) -> str:
-    """Nome padrão: FRS_{numero}. Usado quando nome_arquivo não é informado."""
+def _nome_padrao(numero_frs: str, frs=None) -> str:
+    """
+    Nome padrão usando município e UF obtidos da ML81N:
+        FRS_{numero}_{municipio}_{UF}
+
+    Se município/UF não estiverem disponíveis, usa só o número.
+    """
+    if frs and frs.municipio and frs.UF:
+        municipio = frs.municipio.replace(" ", "_")
+        return f"FRS_{numero_frs}_{municipio}_{frs.UF}"
     return f"FRS_{numero_frs}"
 
 
@@ -76,10 +69,7 @@ def _nome_padrao(numero_frs: str) -> str:
 
 
 class ML83Filter(StrEnum):
-    """
-    Filtros disponíveis na tela de seleção da ML83.
-    Segue o mesmo padrão de ML84Filter — usado internamente pelo MultiSelection.
-    """
+    """Filtros disponíveis na tela de seleção da ML83."""
 
     FRS = "LBLNI"
     COD_ACEITACAO = "KZABN"
@@ -89,22 +79,16 @@ class ML83Filter(StrEnum):
     DATA_DOCUMENTO = "BEDAT"
 
 
-# ----------------------------------------------
-# HELPER PARA RESOLVER BOTÃO DE SELEÇÃO MÚLTIPLA
-# ----------------------------------------------
 def build_button_id(field: ML83Filter) -> str:
     return f"wnd[0]/usr/btn%_S_{field}_%_APP_%-VALU_PUSH"
 
 
-# =======================
-# CLASSE PRINCIPAL
-# =======================
+# ─── Transação ────────────────────────────────────────────────────────────────
+
+
 class ML83(Transaction):
     """
     Transação ML83 — Impressão de FRS como PDF.
-
-    Usa o padrão Builder (igual à ML84) para configurar filtros antes
-    de chamar run(). Cada chamada processa uma FRS por vez.
 
     Uso
     ---
@@ -114,31 +98,22 @@ class ML83(Transaction):
             .run()
         )
         # resultado: list[Path] com os arquivos gerados
-
-    Nomenclatura customizada
-    -------------------------
-        def meu_nome(numero_frs):
-            return f"FRS_{numero_frs}_IPOJUCA"
-
-        ML83(session, destino="C:/pdfs/", nome_arquivo=meu_nome)
-            .filter_frs(["1001909519"])
-            .run()
     """
 
     def __init__(
         self,
         session,
         destino: str | Path,
-        nome_arquivo: Callable[[str], str] = _nome_padrao,
+        nome_arquivo: Callable[[str, object], str] = _nome_padrao,
     ):
         """
         Parâmetros
         ----------
         session      : SAPSession — sessão SAP ativa
         destino      : str | Path — pasta onde os PDFs serão salvos
-        nome_arquivo : Callable[[str], str] — recebe o número da FRS,
-                       retorna o nome do arquivo sem extensão.
-                       Default: "FRS_{numero_frs}"
+        nome_arquivo : Callable[[str, FRS], str]
+                       Recebe (numero_frs, frs) e retorna nome sem extensão.
+                       Default: "FRS_{numero}_{municipio}_{UF}"
         """
         super().__init__(session)
         self.destino = Path(destino)
@@ -150,7 +125,7 @@ class ML83(Transaction):
             raise ConfigError(f"Pasta de destino não encontrada: {self.destino}")
 
     # ------------------------------------------------------------------
-    # BUILDER — configuração de filtros
+    # BUILDER
     # ------------------------------------------------------------------
 
     def filter_frs(self, valores: list[str]) -> "ML83":
@@ -195,46 +170,65 @@ class ML83(Transaction):
         """
         Executa a impressão das FRS filtradas.
 
+        Fluxo
+        -----
+        1. Aplica filtros e executa pesquisa (F8)
+        2. Mapeia FRS disponíveis na tela de resultados
+        3. Pré-carrega dados via ML81N (município, UF para nomenclatura)
+        4. Imprime cada FRS
+
         Retorna
         -------
-        list[Path]
-            Caminhos dos arquivos PDF gerados com sucesso.
-            FRS que falharam são logadas como warning mas não interrompem
-            o processamento das demais.
+        list[Path] — arquivos PDF gerados com sucesso.
+        FRS que falharam são logadas como warning sem interromper as demais.
         """
         self._apply_filters()
         self._run()
 
-        # após F8, a tela de resultados exibe as FRS encontradas
-        # cada FRS é processada individualmente para garantir ID fixo do checkbox
-        return self._processar_resultados()
+        frs_por_linha = self._mapear_frs()
+        if not frs_por_linha:
+            self.logger.warning("Nenhuma FRS encontrada na tela de resultados")
+            return []
+
+        self.logger.info(
+            f"{len(frs_por_linha)} FRS encontrada(s): {list(frs_por_linha.values())}"
+        )
+
+        # pré-carrega dados via ML81N antes de iniciar a impressão
+        # ML81N.run() chama go_home() no cleanup — o SAP volta ao Easy Access.
+        # É necessário reabrir a ML83 e reexecutar a pesquisa para restaurar
+        # a tela de resultados antes de processar as impressões.
+        dados_frs = self._carregar_dados_frs(list(frs_por_linha.values()))
+
+        self.logger.info("Restaurando tela de resultados da ML83")
+        self.session.start_transaction("ML83")
+        self._apply_filters()
+        self._run()
+
+        return self._processar_resultados(frs_por_linha, dados_frs)
 
     # ------------------------------------------------------------------
     # PASSOS INTERNOS
     # ------------------------------------------------------------------
+
     def _apply_filters(self):
         """Aplica os filtros configurados via Builder."""
         for field, values in self._filters.items():
             btn_id = build_button_id(field)
-
             self.logger.debug(f"Abrindo seleção múltipla: {field.name}")
-
             self.session.find(btn_id).press()
-
             multi = MultiSelection(self.session)
-
             multi.clear()
             multi.include_values(values)
             multi.apply()
 
-    # ----------
     def _run(self):
         """
         Executa a pesquisa (F8) e verifica se há resultados.
 
         Lança
         -----
-        ValueError se o SAP indicar que nenhum documento foi encontrado.
+        SAPNotFoundError se o SAP indicar que nenhum documento foi encontrado.
         """
         self.session.send_vkey(8)
 
@@ -245,89 +239,18 @@ class ML83(Transaction):
                 sap_message=status,
             )
 
-    # ----------
-    def _processar_resultados(self) -> list[Path]:
+    def _mapear_frs(self) -> dict[int, str]:
         """
-        Itera sobre as FRS na tela de resultados e gera o PDF de cada uma.
+        Enumera a GuiUserArea e retorna {linha: numero_frs} para todas
+        as FRS imprimíveis encontradas na tela de resultados.
 
-        Estrutura da GuiUserArea
-        ------------------------
-        A tela de resultados mistura linhas de cabeçalho de pedido (laranja)
-        e linhas de FRS. O padrão observado é:
-
-            chk[1,N]  → checkbox de seleção para impressão (coluna 1)
-            lbl[3,N]  → número da FRS correspondente (coluna 3)
+        Padrão observado na tela:
+            chk[1,N]  → checkbox de seleção (coluna 1) — um por FRS
+            lbl[3,N]  → número da FRS (coluna 3)
             chk[20,N] → checkbox de aceite — ignorado
 
         Linhas sem chk[1,N] são cabeçalhos de pedido — ignoradas.
-
-        Estratégia
-        ----------
-        1. Enumera todos os componentes da GuiUserArea via Children
-        2. Filtra checkboxes da coluna 1 (chk[1,N]) — um por FRS
-        3. Para cada um, lê lbl[3,N] para obter o número da FRS
-        4. Seleciona o checkbox, clica em Exibir saída, salva PDF, F3
         """
-        arquivos_gerados: list[Path] = []
-
-        # mapeia as linhas que contêm FRS imprimíveis
-        frs_por_linha = self._mapear_frs()
-
-        if not frs_por_linha:
-            self.logger.warning("Nenhuma FRS encontrada na tela de resultados")
-            return []
-
-        self.logger.info(
-            f"{len(frs_por_linha)} FRS encontrada(s): {list(frs_por_linha.values())}"
-        )
-
-        for linha, numero_frs in frs_por_linha.items():
-            self.logger.info(f"Processando FRS {numero_frs} (linha {linha})")
-
-            chk_path = f"wnd[0]/usr/chk[1,{linha}]"
-
-            try:
-                # seleciona o checkbox desta FRS
-                self.session.find(chk_path).selected = True
-
-                # clica em "Exibir saída"
-                self.session.find(_PATH_BTN_EXIBIR).press()
-
-                # na tela de visualização, clica em "Imprimir"
-                self.session.find(_PATH_BTN_IMPRIMIR).press()
-
-                # salva o PDF via popup Windows
-                nome = self.nome_arquivo(numero_frs)
-                caminho = self.destino / f"{nome}.pdf"
-                self._salvar_popup_windows(str(caminho))
-
-                arquivos_gerados.append(caminho)
-                self.logger.info(f"FRS {numero_frs} salva em: {caminho}")
-
-            except Exception as e:
-                self.logger.warning(f"FRS {numero_frs}: erro ao processar — {e}")
-            finally:
-                # volta à tela de resultados independente de sucesso ou falha
-                self.session.send_vkey(3)  # F3
-
-        return arquivos_gerados
-
-    def _mapear_frs(self) -> dict[int, str]:
-        """
-        Enumera a GuiUserArea e retorna um dicionário {linha: numero_frs}
-        para todas as FRS imprimíveis encontradas na tela de resultados.
-
-        Lógica
-        ------
-        Itera pelos filhos da GuiUserArea buscando elementos cujo ID
-        corresponde ao padrão chk[1,N] (checkbox de seleção, coluna 1).
-        Para cada um, lê lbl[3,N] na mesma linha N para obter o número
-        da FRS. Checkboxes na coluna 20 (aceite) são ignorados.
-
-        Retorna dict ordenado por linha para garantir processamento sequencial.
-        """
-        import re
-
         usr = self.session.find("wnd[0]/usr")
         resultado: dict[int, str] = {}
 
@@ -342,16 +265,15 @@ class ML83(Transaction):
                 child = children.ElementAt(i)
                 child_id = child.Id
 
-                # busca por chk[1,N] — checkbox de seleção (coluna 1)
+                # busca chk[1,N] — checkbox de seleção (coluna 1)
                 m = re.search(r"chk\[1,(\d+)\]", child_id)
                 if not m:
                     continue
 
                 linha = int(m.group(1))
 
-                # lê o número da FRS em lbl[3,N] — mesma linha, coluna 3
-                lbl_path = f"wnd[0]/usr/lbl[3,{linha}]"
-                numero_frs = self.session.get_text(lbl_path).strip()
+                # lê número da FRS em lbl[3,N]
+                numero_frs = self.session.get_text(f"wnd[0]/usr/lbl[3,{linha}]").strip()
 
                 if numero_frs:
                     resultado[linha] = numero_frs
@@ -363,70 +285,105 @@ class ML83(Transaction):
 
         return dict(sorted(resultado.items()))
 
-    def _ler_numero_frs(self, linha: int) -> str:
+    def _carregar_dados_frs(self, numeros: list[str]) -> dict:
         """
-        Lê o número da FRS na linha informada.
+        Pré-carrega dados de cada FRS via ML81N antes de iniciar a impressão.
 
-        Na tela de resultados da ML83, o número da FRS está em uma
-        GuiLabel na coluna 6 da linha correspondente.
+        Retorna {numero_frs: FRS}. FRS que falharem ficam como None —
+        o nome padrão sem município será usado para elas.
         """
-        path = f"wnd[0]/usr/lbl[6,{linha}]"
-        return self.session.get_text(path).strip()
+        from sap_automation.transactions.mm.ml81n import ML81N
+
+        dados = {}
+        for numero in numeros:
+            try:
+                self.logger.debug(f"Carregando dados da FRS {numero} via ML81N")
+                dados[numero] = ML81N(self.session, numero).run()
+            except Exception as e:
+                self.logger.warning(f"Erro ao carregar FRS {numero} via ML81N: {e}")
+                dados[numero] = None
+        return dados
+
+    def _processar_resultados(
+        self,
+        frs_por_linha: dict[int, str],
+        dados_frs: dict,
+    ) -> list[Path]:
+        """
+        Itera sobre as FRS mapeadas e gera o PDF de cada uma.
+
+        Para cada FRS:
+            1. Seleciona o checkbox
+            2. Clica em Exibir saída
+            3. Clica em Imprimir
+            4. Salva o PDF via popup Windows
+            5. Volta à tela de resultados (F3)
+        """
+        arquivos_gerados: list[Path] = []
+
+        for linha, numero_frs in frs_por_linha.items():
+            self.logger.info(f"Processando FRS {numero_frs} (linha {linha})")
+
+            chk_path = f"wnd[0]/usr/chk[1,{linha}]"
+
+            try:
+                self.session.find(chk_path).selected = True
+                self.session.find(_PATH_BTN_EXIBIR).press()
+                self.session.find(_PATH_BTN_IMPRIMIR).press()
+
+                frs_data = dados_frs.get(numero_frs)
+                nome = self.nome_arquivo(numero_frs, frs_data)
+                caminho = self.destino / f"{nome}.pdf"
+
+                self._salvar_popup_windows(str(caminho))
+
+                arquivos_gerados.append(caminho)
+                self.logger.info(f"FRS {numero_frs} salva em: {caminho}")
+
+            except Exception as e:
+                self.logger.warning(f"FRS {numero_frs}: erro ao processar — {e}")
+            finally:
+                # volta à tela de resultados independente de sucesso ou falha
+                self.session.send_vkey(3)  # F3
+
+        return arquivos_gerados
+
+    # ------------------------------------------------------------------
+    # POPUP WINDOWS
+    # ------------------------------------------------------------------
 
     def _salvar_popup_windows(self, caminho_completo: str):
         """
         Interage com o popup nativo do Windows "Salvar Saída de Impressão como".
 
-        Estratégia: em vez de navegar pela hierarquia de handles (frágil para
-        diálogos modernos do Windows), traz o popup para frente e usa
-        SendKeys para digitar o caminho e confirmar com Enter.
+        Estrutura do popup (mapeada via EnumChildWindows):
+            FloatNotifySink → ComboBox → Edit  ← campo de nome
+            Button text='Sa&lvar'              ← filho direto do popup
 
-        Fluxo:
-            1. Aguarda o popup aparecer
-            2. Traz para frente (SetForegroundWindow)
-            3. Abre o campo de nome com Ctrl+L (atalho universal do Explorer)
-            4. Digita o caminho completo
-            5. Confirma com Enter (salva o arquivo)
-
-        Parâmetros
-        ----------
-        caminho_completo : str — caminho absoluto do arquivo a ser salvo,
-                           incluindo nome e extensão (.pdf).
-
-        Lança
-        -----
-        TimeoutError se o popup não aparecer dentro de _TIMEOUT_POPUP segundos.
+        O campo Edit fica aninhado, portanto usa _find_edit_recursivo().
+        O botão tem ampersand ('Sa&lvar'), portanto busca por substring 'lvar'.
         """
-        import win32api
-        import win32process
-
-        self.logger.debug(f"Aguardando popup Windows: {_TITULO_POPUP_WINDOWS!r}")
-
+        self.logger.debug(f"Aguardando popup: {_TITULO_POPUP_WINDOWS!r}")
         hwnd = self._aguardar_janela(_TITULO_POPUP_WINDOWS, _TIMEOUT_POPUP)
 
-        # traz o popup para frente — necessário para SendKeys funcionar
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.SetForegroundWindow(hwnd)
         time.sleep(0.3)
 
-        # usa SendMessage com WM_SETTEXT diretamente no Edit dentro do ComboBox
-        # o ComboBox de nome do arquivo é o último Edit da hierarquia do popup
+        # preenche o campo de nome
         hwnd_edit = self._find_edit_recursivo(hwnd)
         if hwnd_edit:
-            # abordagem 1: WM_SETTEXT direto no Edit (sem focar o campo)
             win32gui.SendMessage(hwnd_edit, win32con.WM_SETTEXT, 0, caminho_completo)
-            self.logger.debug(f"Caminho preenchido via WM_SETTEXT: {caminho_completo}")
+            self.logger.debug(f"Caminho preenchido: {caminho_completo}")
         else:
-            # abordagem 2: fallback via teclado — seleciona tudo e digita
-            self.logger.debug("Edit não encontrado — usando fallback via teclado")
+            # fallback via clipboard
+            import win32api
             import win32clipboard
 
             win32clipboard.OpenClipboard()
             win32clipboard.EmptyClipboard()
             win32clipboard.SetClipboardText(caminho_completo)
             win32clipboard.CloseClipboard()
-
-            # Ctrl+A para selecionar texto existente, Ctrl+V para colar
             win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
             win32api.keybd_event(ord("A"), 0, 0, 0)
             win32api.keybd_event(ord("A"), 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -434,23 +391,27 @@ class ML83(Transaction):
             win32api.keybd_event(ord("V"), 0, win32con.KEYEVENTF_KEYUP, 0)
             win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
             time.sleep(0.2)
+            self.logger.debug("Caminho preenchido via clipboard")
 
-        # confirma com Enter — equivale a clicar em Salvar
-        win32api.keybd_event(win32con.VK_RETURN, 0, 0, 0)
-        win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
-        self.logger.debug("Enter enviado — salvamento confirmado")
+        # confirma com botão Salvar
+        hwnd_salvar = self._find_button(hwnd, "lvar")
+        if hwnd_salvar:
+            win32gui.SendMessage(hwnd_salvar, win32con.BM_CLICK, 0, 0)
+            self.logger.debug("Botão Salvar clicado")
+        else:
+            # fallback via Enter
+            import win32api
 
-        # aguarda o SAP processar o salvamento antes de continuar
-        time.sleep(_DELAY_APOS_SALVAR)
+            win32api.keybd_event(win32con.VK_RETURN, 0, 0, 0)
+            win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
+            self.logger.debug("Enter enviado como fallback")
+
+        # aguarda popup fechar antes de continuar
+        self._aguardar_popup_fechar(hwnd, timeout=_TIMEOUT_POPUP)
+        self.logger.debug("Popup fechado — salvamento concluído")
 
     def _find_edit_recursivo(self, hwnd_pai: int) -> int | None:
-        """
-        Busca recursivamente o primeiro campo Edit dentro de uma janela.
-
-        Necessário porque o campo de nome do arquivo no diálogo moderno
-        do Windows fica aninhado em múltiplos níveis (ComboBox dentro de
-        FloatNotifySink), não como filho direto do popup.
-        """
+        """Busca recursivamente o primeiro campo Edit dentro de uma janela."""
         resultado = []
 
         def callback(hwnd, _):
@@ -460,12 +421,26 @@ class ML83(Transaction):
         win32gui.EnumChildWindows(hwnd_pai, callback, None)
         return resultado[0] if resultado else None
 
+    def _aguardar_popup_fechar(self, hwnd: int, timeout: float):
+        """
+        Aguarda um popup Windows fechar completamente verificando
+        se o handle hwnd deixou de ser uma janela válida.
+        """
+        inicio = time.time()
+        while time.time() - inicio < timeout:
+            if not win32gui.IsWindow(hwnd):
+                return
+            time.sleep(0.2)
+
+        raise SAPTimeoutError(
+            f"Popup de salvamento não fechou após {timeout}s. "
+            "O arquivo pode não ter sido salvo corretamente."
+        )
+
     def _aguardar_janela(self, titulo: str, timeout: float) -> int:
         """
         Aguarda uma janela Windows com o título informado aparecer.
-
-        Retorna o handle (hwnd) da janela encontrada.
-        Lança TimeoutError se não encontrar dentro do timeout.
+        Retorna o hwnd da janela. Lança SAPTimeoutError se não encontrar.
         """
         inicio = time.time()
         while time.time() - inicio < timeout:
@@ -481,11 +456,7 @@ class ML83(Transaction):
         )
 
     def _find_button(self, hwnd_pai: int, texto: str) -> int | None:
-        """
-        Localiza um botão filho pelo texto dentro de uma janela pai.
-
-        Retorna o handle do botão, ou None se não encontrado.
-        """
+        """Localiza um botão filho pelo texto dentro de uma janela pai."""
         resultado = []
 
         def callback(hwnd, _):
