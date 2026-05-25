@@ -52,9 +52,9 @@ class SAP:
         (ex: rodando direto do repositório sem pip install -e .).
         """
         try:
-            return version("sap-automation")
+            return f"sap-automation v{version('sap-automation')}"
         except PackageNotFoundError:
-            return "0.0.0-dev"
+            return "sap-automation v0.0.0-dev"
 
     # ------------------------------------------------------------------
     # MÓDULOS
