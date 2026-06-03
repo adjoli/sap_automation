@@ -21,8 +21,8 @@ import hashlib
 import json
 import logging
 import sqlite3
-from enum import IntEnum
 from datetime import datetime, timezone
+from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
@@ -33,10 +33,11 @@ logger = logging.getLogger("sap_automation.cache")
 # TTLs padrão por operação (em segundos)
 # ------------------------------------------------------------------
 class CacheTTL(IntEnum):
-    ML84  = 1 * 3600        #  1 hora  — listagem de FRS
-    ML81N = 24 * 3600       # 24 horas — detalhes de uma FRS
-    ME33K = 7 * 24 * 3600   #  7 dias  — contrato (raramente muda)
-    ME23N = 4 * 3600        #  4 horas — pedido de compras
+    ML84 = 1 * 3600  #  1 hora  — listagem de FRS
+    ML81N = 24 * 3600  # 24 horas — detalhes de uma FRS
+    ME33K = 7 * 24 * 3600  #  7 dias  — contrato (raramente muda)
+    ME23N = 4 * 3600  #  4 horas — pedido de compras
+
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS cache (
@@ -117,15 +118,15 @@ class CacheManager:
                     created_at = excluded.created_at,
                     ttl        = excluded.ttl
                 """,
-                (key, json.dumps(value, ensure_ascii=False, default=str), now, effective_ttl),
+                (
+                    key,
+                    json.dumps(value, ensure_ascii=False, default=str),
+                    now,
+                    effective_ttl,
+                ),
             )
 
         logger.debug("Cache SET (ttl=%ds): %s", effective_ttl, key)
-
-    def invalidate(self, key: str) -> None:
-        """Remove uma entrada específica do cache."""
-        self._delete(key)
-        logger.debug("Cache INVALIDADO: %s", key)
 
     def invalidate_all(self) -> int:
         """
@@ -137,25 +138,6 @@ class CacheManager:
             count = cursor.rowcount
 
         logger.info("Cache limpo: %d entradas removidas", count)
-        return count
-
-    def purge_expired(self) -> int:
-        """
-        Remove entradas com TTL expirado.
-        Retorna o número de entradas removidas.
-        """
-        now = datetime.now(timezone.utc).timestamp()
-
-        with self._connect() as conn:
-            cursor = conn.execute(
-                "DELETE FROM cache WHERE (? - created_at) > ttl",
-                (now,),
-            )
-            count = cursor.rowcount
-
-        if count:
-            logger.debug("Cache: %d entradas expiradas removidas", count)
-
         return count
 
     # ------------------------------------------------------------------
