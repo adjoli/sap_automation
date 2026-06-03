@@ -1,11 +1,14 @@
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from sap_automation.cache import CacheManager, CacheTTL
 from sap_automation.client.config import SAPConfig
 from sap_automation.client.connection import SAPConnection
 from sap_automation.core.types import ReadMode
-from sap_automation.models.mm.frs import ML84Item
-from sap_automation.transactions.mm import ME23N, ML81N, ML83, ML84
+from sap_automation.models.mm.contrato import Contrato
+from sap_automation.models.mm.frs import FRS, ML84Item
+from sap_automation.models.mm.pedido import Pedido
+from sap_automation.transactions.mm import ME23N, ME33K, ML81N, ML83, ML84
 
 
 class SAP:
@@ -20,15 +23,28 @@ class SAP:
         config = SAPConfig.from_env()
         sap = SAP(config).connect()
 
-        pedido = sap.mm.me23n("4500012345")
-        frs    = sap.mm.ml81n("1001904414")
-        frs_pdf = sap.mm.ml83(frs=["1001909519"], destino="C:/pdfs/")
+        pedido   = sap.mm.me23n("4500012345")
+        frs      = sap.mm.ml81n("1001904414")
+        frs_list = sap.mm.ml84(pedidos=["4500012345"])
+        frs_pdf  = sap.mm.ml83(frs=["1001909519"], destino="C:/pdfs/")
+
+    Cache
+    -----
+    Por padrão, os resultados são cacheados em SQLite com TTL por operação.
+    Para ignorar o cache e forçar consulta ao SAP:
+
+        frs_list = sap.mm.ml84(pedidos=["4500012345"], force=True)
+
+    O banco de cache fica em ~/.sap_automation/cache.db por padrão.
+    Para customizar, defina SAP_CACHE_DB no .env ou passe cache_db_path
+    ao SAPConfig.
     """
 
     def __init__(self, config: SAPConfig):
         self.config = config
         self._connection = SAPConnection(config)
         self.session = None
+        self.cache = CacheManager(config.cache_db_path)
         self.mm = self.MM(self)
 
     def connect(self) -> "SAP":
@@ -66,13 +82,21 @@ class SAP:
 
         Agrupa as transações do módulo MM e isola a criação dos objetos
         Transaction do código cliente — que só precisa chamar métodos.
+
+        Todos os métodos de consulta aceitam force=True para ignorar o
+        cache e buscar diretamente do SAP.
         """
 
         def __init__(self, sap: "SAP"):
             self.sap = sap
 
         # - - - - - - - - - - - - - - - - -
-        def me23n(self, pedido: str, mode: ReadMode = ReadMode.DEEP) -> ME23N:
+        def me23n(
+            self,
+            pedido: str,
+            mode: ReadMode = ReadMode.DEEP,
+            force: bool = False,
+        ) -> Pedido:
             """
             Consulta um pedido de compras (ME23N).
 
@@ -81,15 +105,59 @@ class SAP:
             pedido : str      — número do pedido (ex: "4500012345")
             mode   : ReadMode — DEEP (padrão): cabeçalho + itens + histórico
                                 SHALLOW: apenas cabeçalho
+            force  : bool     — True ignora o cache e consulta o SAP diretamente
 
             Retorna
             -------
             Pedido
             """
-            return ME23N(self.sap.session, pedido, mode=mode).run()
+            key = CacheManager.make_key("me23n", pedido=pedido, mode=str(mode))
+
+            if not force:
+                cached = self.sap.cache.get(key)
+                if cached is not None:
+                    return Pedido(**cached)
+
+            result: Pedido = ME23N(self.sap.session, pedido, mode=mode).run()
+            self.sap.cache.set(key, result.model_dump(), ttl=CacheTTL.ME23N)
+            return result
 
         # - - - - - - - - - - - - - - - - -
-        def ml81n(self, frs: str, mode: ReadMode = ReadMode.DEEP) -> ML81N:
+        def me33k(
+            self,
+            contrato: str,
+            force: bool = False,
+        ) -> Contrato:
+            """
+            Consulta um contrato (ME33K).
+
+            Parâmetros
+            ----------
+            contrato : str  — número do contrato (ex: "4600017196")
+            force    : bool — True ignora o cache e consulta o SAP diretamente
+
+            Retorna
+            -------
+            Contrato
+            """
+            key = CacheManager.make_key("me33k", contrato=contrato)
+
+            if not force:
+                cached = self.sap.cache.get(key)
+                if cached is not None:
+                    return Contrato(**cached)
+
+            result: Contrato = ME33K(self.sap.session, contrato).run()
+            self.sap.cache.set(key, result.model_dump(), ttl=CacheTTL.ME33K)
+            return result
+
+        # - - - - - - - - - - - - - - - - -
+        def ml81n(
+            self,
+            frs: str,
+            mode: ReadMode = ReadMode.DEEP,
+            force: bool = False,
+        ) -> FRS:
             """
             Consulta uma Folha de Registro de Serviços (ML81N).
 
@@ -98,12 +166,22 @@ class SAP:
             frs  : str      — número da FRS (ex: "1001904414")
             mode : ReadMode — DEEP (padrão): extração completa
                               SHALLOW: cabeçalho + DdsBásicos (municipio, UF)
+            force : bool    — True ignora o cache e consulta o SAP diretamente
 
             Retorna
             -------
             FRS
             """
-            return ML81N(self.sap.session, frs, mode=mode).run()
+            key = CacheManager.make_key("ml81n", frs=frs, mode=str(mode))
+
+            if not force:
+                cached = self.sap.cache.get(key)
+                if cached is not None:
+                    return FRS(**cached)
+
+            result: FRS = ML81N(self.sap.session, frs, mode=mode).run()
+            self.sap.cache.set(key, result.model_dump(), ttl=CacheTTL.ML81N)
+            return result
 
         # - - - - - - - - - - - - - - - - -
         def ml83(
@@ -119,6 +197,9 @@ class SAP:
         ) -> list[Path]:
             """
             Imprime FRS como PDF (ML83).
+
+            Nota: ml83 não usa cache — cada execução gera arquivos
+            físicos no disco e depende do estado atual do SAP.
 
             Parâmetros
             ----------
@@ -137,7 +218,6 @@ class SAP:
             -------
             list[Path] — caminhos dos PDFs gerados com sucesso
             """
-
             kwargs = {"destino": destino}
             if nome_arquivo:
                 kwargs["nome_arquivo"] = nome_arquivo
@@ -168,6 +248,7 @@ class SAP:
             req_compras: list[str] | None = None,
             centros: list[str] | None = None,
             status: str = "tudo",
+            force: bool = False,
         ) -> list[ML84Item]:
             """
             Lista Folhas de Registro de Serviços com filtros (ML84).
@@ -182,12 +263,28 @@ class SAP:
             fornecedores : list[str] | None — códigos de fornecedor
             req_compras  : list[str] | None — números de requisição de compra
             centros      : list[str] | None — códigos de centro
-            status       : str — "tudo" | "aceito" | "nao_aceito" (padrão: "tudo")
+            status       : str  — "tudo" | "aceito" | "nao_aceito" (padrão: "tudo")
+            force        : bool — True ignora o cache e consulta o SAP diretamente
 
             Retorna
             -------
             list[ML84Item]
             """
+            key = CacheManager.make_key(
+                "ml84",
+                frs=frs,
+                pedidos=pedidos,
+                fornecedores=fornecedores,
+                req_compras=req_compras,
+                centros=centros,
+                status=status,
+            )
+
+            if not force:
+                cached = self.sap.cache.get(key)
+                if cached is not None:
+                    return [ML84Item(**item) for item in cached]
+
             ml84 = ML84(self.sap.session)
 
             if frs:
@@ -203,4 +300,10 @@ class SAP:
 
             ml84.status(status)
 
-            return ml84.run()
+            result: list[ML84Item] = ml84.run()
+            self.sap.cache.set(
+                key,
+                [item.model_dump() for item in result],
+                ttl=CacheTTL.ML84,
+            )
+            return result
