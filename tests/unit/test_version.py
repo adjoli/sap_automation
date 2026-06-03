@@ -91,7 +91,7 @@ class TestVersion:
         Instanciamos via __new__ para evitar que __init__ tente conectar ao SAP.
         """
         sap = SAP.__new__(SAP)
-        assert sap.version == sap_automation.__version__
+        assert sap.version == f"sap-automation v{sap_automation.__version__}"
 
     def test_version_fallback_quando_pacote_nao_instalado(self, mocker):
         """
@@ -111,7 +111,7 @@ class TestVersion:
         )
 
         sap = SAP.__new__(SAP)
-        assert sap.version == "0.0.0-dev"
+        assert sap.version == "sap-automation v0.0.0-dev"
 
     def test_version_consistente_entre_importacoes(self):
         """

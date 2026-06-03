@@ -1,3 +1,4 @@
+import logging
 import re
 
 from sap_automation.components import Section, TableControl, TabStrip
@@ -7,61 +8,7 @@ from sap_automation.core.converters import parse_sap_date, parse_sap_float
 from sap_automation.parsers.me23n_parser import parse_me23n_items
 from sap_automation.screens.base import Screen
 
-# ─── IDs fixos da ME23N ───────────────────────────────────────────────────────
-# Verificados como estáveis entre execuções e pedidos diferentes.
-# Obtidos via SAP Tracker com um pedido aberto na ME23N.
-# Se uma atualização do SAP alterar esses IDs, basta atualizar as constantes abaixo.
-
-_ID_TOPO = (
-    "wnd[0]/usr/subSUB0:SAPLMEGUI:0013/subSUB0:SAPLMEGUI:0030/subSUB1:SAPLMEGUI:1105"
-)
-"""Container do topo — campos de fornecedor, data e número do pedido."""
-
-_ID_SECAO0 = (
-    "wnd[0]/usr"
-    "/subSUB0:SAPLMEGUI:0013"
-    "/subSUB1:SAPLMEVIEWS:1100"
-    "/subSUB1:SAPLMEVIEWS:4000"
-)
-"""Container da seção [0] — detalhes do cabeçalho (contém o TabStrip de abas)."""
-
-_ID_HEADER_TABS = (
-    "wnd[0]/usr"
-    "/subSUB0:SAPLMEGUI:0013"
-    "/subSUB1:SAPLMEVIEWS:1100"
-    "/subSUB2:SAPLMEVIEWS:1200"
-    "/subSUB1:SAPLMEGUI:1102"
-    "/tabsHEADER_DETAIL"
-)
-"""TabStrip principal do cabeçalho do pedido."""
-
-_ID_TLC_TAB = (
-    "wnd[0]/usr"
-    "/subSUB0:SAPLMEGUI:0013"
-    "/subSUB1:SAPLMEVIEWS:1100"
-    "/subSUB2:SAPLMEVIEWS:1200"
-    "/subSUB1:SAPLMEGUI:1102"
-    "/tabsHEADER_DETAIL"
-    "/tabpTABHDT11"
-    "/ssubTABSTRIPCONTROL2SUB:SAPLMEGUI:1227"
-    "/ssubCUSTOMER_DATA_HEADER:SAPLXM06:0101"
-    "/tabsTABSTRIP_0101"
-)
-"""TabStrip interno da aba 'Dados do cliente' — contém a aba TLC."""
-
-_ID_TABELA = (
-    "wnd[0]/usr"
-    "/subSUB0:SAPLMEGUI:0013"
-    "/subSUB2:SAPLMEVIEWS:1100"
-    "/subSUB2:SAPLMEVIEWS:1200"
-    "/subSUB1:SAPLMEGUI:1211"
-    "/tblSAPLMEGUITC_1211"
-)
-"""GuiTableControl da tabela de itens do pedido."""
-
 # ─── Tab map do cabeçalho ─────────────────────────────────────────────────────
-# Sufixos descobertos via SAP Tracker — parte após "tabp" no ID completo da aba.
-# Exemplo: .../tabsHEADER_DETAIL/tabpTABHDT10 → sufixo = "TABHDT10"
 _HEADER_TAB_MAP = {
     "Remessa": "TABHDT1",
     "Condições": "TABHDT2",
@@ -77,17 +24,20 @@ _HEADER_TAB_MAP = {
     "Detalhes externos": "TABHDT13",
 }
 
+# ─── Sufixo fixo após o prefixo variável ──────────────────────────────────────
+_SUFIXO_HEADER_TABS = (
+    "/subSUB1:SAPLMEVIEWS:1100"
+    "/subSUB2:SAPLMEVIEWS:1200"
+    "/subSUB1:SAPLMEGUI:1102"
+    "/tabsHEADER_DETAIL"
+)
+
 
 def _parse_fornecedor(texto: str | None) -> tuple[str | None, str | None]:
     """
     Separa o texto do campo fornecedor em código e descrição.
-
-    O SAP retorna o fornecedor como "<codigo> <nome>", ex:
-        "9000013096 C.HENRIQUE BODEMEIER & CIA LTDA"
-
+    Ex: "9000013096 C.HENRIQUE BODEMEIER & CIA LTDA"
     Retorna (cod_fornecedor, desc_fornecedor).
-    Se o texto não começar com dígitos, retorna (None, texto).
-    Se o texto for vazio ou None, retorna (None, None).
     """
     if not texto or not texto.strip():
         return None, None
@@ -101,38 +51,81 @@ class ME23NScreen(Screen):
     """
     Tela da transação ME23N — Exibir Pedido de Compras.
 
-    Encapsula toda a lógica de navegação na tela, separando-a da lógica de
-    negócio em ME23N.execute(). A Transaction apenas chama os métodos desta
-    classe e monta o objeto Pedido com os dados retornados.
+    O prefixo do ID (subSUB0:SAPLMEGUI:XXXX) varia conforme o tipo do pedido.
+    _resolve_prefix() descobre o prefixo correto tentando session.find()
+    com os valores conhecidos — sem walk recursivo.
 
-    Estratégia de acesso
-    --------------------
-    Todos os elementos principais são acessados via IDs fixos (session.find),
-    eliminando walks recursivos que custariam 2-3s por chamada.
-
-    Os IDs foram verificados como estáveis entre execuções e pedidos.
-    O SAPExplorer (walk) é usado apenas onde o ID não é estável —
-    atualmente apenas no item_tabs, cujo ID varia conforme o item selecionado.
-
-    Layout da tela
-    --------------
-    A ME23N tem 4 seções, sendo a primeira fixa (não colapsável):
-
-        [fixa]  Linha do topo     — número do pedido, fornecedor, data
-        [0]     Cabeçalho         — TabStrip com abas de dados do pedido
-        [1]     Itens             — tabela de itens do pedido
-        [2]     Detalhes do item  — TabStrip com abas do item selecionado
-
-    A seção [0] precisa estar expandida antes de acessar o TabStrip do cabeçalho.
-    O SAP permite no máximo 2 seções expandidas simultaneamente.
-
-    Abas do cabeçalho
-    -----------------
-    Mapeadas em _HEADER_TAB_MAP. As abas lidas atualmente são:
-        - Status        → campo liberado
-        - Textos        → texto breve do pedido
-        - Dados do cliente → sub-TabStrip → aba TLC
+    Adicione novos prefixos em _PREFIXOS_CONHECIDOS conforme encontrar
+    novos tipos de pedido via SAP Tracker.
     """
+
+    # Prefixos conhecidos — adicionar novos conforme encontrar via SAP Tracker
+    _PREFIXOS_CONHECIDOS = [
+        "wnd[0]/usr/subSUB0:SAPLMEGUI:0013",
+        "wnd[0]/usr/subSUB0:SAPLMEGUI:0019",
+        "wnd[0]/usr/subSUB0:SAPLMEGUI:0020",
+    ]
+
+    def __init__(self, session):
+        super().__init__(session)
+        self.logger = logging.getLogger("sap.screens.me23n")
+        self._prefix_cache: str | None = None
+
+    # ------------------------------------------------------------------
+    # RESOLUÇÃO DINÂMICA DE IDs
+    # ------------------------------------------------------------------
+
+    def _resolve_prefix(self) -> str:
+        """
+        Descobre o prefixo variável da ME23N tentando session.find()
+        com os valores conhecidos de subSUB0:SAPLMEGUI:XXXX.
+
+        Usa acesso direto via ID — sem walk recursivo, sem dependência
+        do estado de expansão de seções.
+
+        Se nenhum prefixo conhecido funcionar, adicione o novo valor
+        a _PREFIXOS_CONHECIDOS consultando o SAP Tracker com o pedido aberto.
+        """
+        if self._prefix_cache:
+            return self._prefix_cache
+
+        for prefix in self._PREFIXOS_CONHECIDOS:
+            candidate = prefix + _SUFIXO_HEADER_TABS
+            try:
+                self.session.find(candidate)
+                self._prefix_cache = prefix
+                self.logger.debug(f"Prefixo ME23N: {prefix}")
+                return prefix
+            except Exception:
+                continue
+
+        raise RuntimeError(
+            f"Prefixo da ME23N não encontrado entre os conhecidos: "
+            f"{self._PREFIXOS_CONHECIDOS}. "
+            f"Abra o SAP Tracker com o pedido, localize tabsHEADER_DETAIL "
+            f"e adicione o novo prefixo (subSUB0:SAPLMEGUI:XXXX) em "
+            f"ME23NScreen._PREFIXOS_CONHECIDOS."
+        )
+
+    def _build_ids(self, prefix: str) -> dict:
+        """Monta os IDs completos da ME23N a partir do prefixo."""
+        return {
+            "topo": (f"{prefix}/subSUB0:SAPLMEGUI:0030/subSUB1:SAPLMEGUI:1105"),
+            "secao0": (f"{prefix}/subSUB1:SAPLMEVIEWS:1100/subSUB1:SAPLMEVIEWS:4000"),
+            "header_tabs": (f"{prefix}{_SUFIXO_HEADER_TABS}"),
+            "tlc_tab": (
+                f"{prefix}/subSUB1:SAPLMEVIEWS:1100"
+                f"/subSUB2:SAPLMEVIEWS:1200/subSUB1:SAPLMEGUI:1102"
+                f"/tabsHEADER_DETAIL/tabpTABHDT11"
+                f"/ssubTABSTRIPCONTROL2SUB:SAPLMEGUI:1227"
+                f"/ssubCUSTOMER_DATA_HEADER:SAPLXM06:0101/tabsTABSTRIP_0101"
+            ),
+            "tabela": (
+                f"{prefix}/subSUB2:SAPLMEVIEWS:1100"
+                f"/subSUB2:SAPLMEVIEWS:1200/subSUB1:SAPLMEGUI:1211"
+                f"/tblSAPLMEGUITC_1211"
+            ),
+        }
 
     # ------------------------------------------------------------------
     # SEÇÕES
@@ -141,27 +134,12 @@ class ME23NScreen(Screen):
     def section(self, index: int) -> Section:
         """
         Acessa uma seção colapsável da ME23N pelo índice (0-based).
-
-        Índices disponíveis:
-            [0] Detalhes do cabeçalho — acessada por ID fixo (_ID_SECAO0)
-            [1] Itens
-            [2] Detalhes do item selecionado
-
-        A seção [0] usa ID fixo para evitar walk. As seções [1] e [2]
-        ainda usam find_collapsible_sections() — seus IDs não foram
-        verificados. Aplique o mesmo processo de coleta via Tracker
-        quando precisar otimizá-las.
-
-        Parâmetros
-        ----------
-        index : int — índice da seção (0-based)
-
-        Lança
-        -----
-        IndexError se o índice for inválido.
+        [0] Cabeçalho, [1] Itens, [2] Detalhes do item.
         """
         if index == 0:
-            return Section(self.session.find(_ID_SECAO0))
+            prefix = self._resolve_prefix()
+            ids = self._build_ids(prefix)
+            return Section(self.session.find(ids["secao0"]))
 
         containers = self.explorer.find_collapsible_sections()
         if index >= len(containers):
@@ -176,18 +154,12 @@ class ME23NScreen(Screen):
 
     @property
     def header_tabs(self) -> TabStrip:
-        """
-        TabStrip do cabeçalho em modo from_path_with_map.
-
-        Usa _ID_HEADER_TABS (fixo) e _HEADER_TAB_MAP (sufixos conhecidos).
-        Todas as operações (select, exists, current_explorer) usam
-        session.find() direto — custo ~0ms por operação.
-
-        Pré-condição: seção [0] deve estar expandida.
-        """
+        """TabStrip do cabeçalho — usa prefixo dinâmico."""
+        prefix = self._resolve_prefix()
+        ids = self._build_ids(prefix)
         return TabStrip.from_path_with_map(
             self.session,
-            _ID_HEADER_TABS,
+            ids["header_tabs"],
             tab_map=_HEADER_TAB_MAP,
         )
 
@@ -199,29 +171,24 @@ class ME23NScreen(Screen):
         """
         Lê os dados do cabeçalho do pedido navegando pelas abas relevantes.
 
-        Fluxo de navegação
-        ------------------
-        1. Lê campos do topo (seção fixa — sempre visível)
-        2. Expande seção [0] para revelar o TabStrip
-        3. Aba Status    → campo liberado
-        4. Aba Textos    → texto breve
-        5. Aba Dados do cliente → sub-aba TLC
-
-        Retorna
-        -------
-        dict com as chaves:
-            tipo        : str | None  — tipo do documento (ex: "NB", "ZNB")
-            fornecedor  : str | None  — código e nome do fornecedor
-            data        : date | None — data do documento
-            liberado    : str | None  — texto do status de liberação
-            valor_total : float | None
-            texto_breve : str | None  — texto breve do pedido (aba Textos)
-            tlc         : str | None  — tipo de linha de contrato (aba Dados do cliente)
+        Fluxo
+        -----
+        1. Resolve prefixo e monta IDs dinamicamente
+        2. Expande seção [0]
+        3. Lê campos do topo
+        4. Navega pelas abas: Status, Textos, Dados do cliente → TLC
         """
         result = {}
 
-        # ── campos do topo (seção fixa — sempre visível) ──────────────────────
-        top_explorer = SAPExplorer(self.session.find(_ID_TOPO))
+        # resolve prefixo e monta IDs — feito uma vez, cacheado
+        prefix = self._resolve_prefix()
+        ids = self._build_ids(prefix)
+
+        # expande seção [0] para revelar o TabStrip
+        self.section(0).expand()
+
+        # campos do topo (seção fixa — sempre visível)
+        top_explorer = SAPExplorer(self.session.find(ids["topo"]))
         fields = top_explorer.read_fields(
             "cmbMEPO_TOPLINE-BSART",  # tipo do pedido
             "MEPO_TOPLINE-SUPERFIELD",  # código + nome do fornecedor
@@ -233,24 +200,31 @@ class ME23NScreen(Screen):
         result["desc_fornecedor"] = desc
         result["data"] = parse_sap_date(fields.get("ctxtMEPO_TOPLINE-BEDAT"))
 
-        # ── expande seção [0] para revelar o TabStrip do cabeçalho ───────────
-        self.section(0).expand()
+        tabs = TabStrip.from_path_with_map(
+            self.session,
+            ids["header_tabs"],
+            tab_map=_HEADER_TAB_MAP,
+        )
 
-        tabs = self.header_tabs
+        # aba Dados organizacionais
+        tabs.select("Dados organizacionais")
+        fields = tabs.current_explorer().read_fields(
+            "ctxtMEPO1222-EKGRP",  # grupo comprador
+        )
+        result["grp_comprador"] = fields.get("ctxtMEPO1222-EKGRP")
 
-        # ── aba Status ────────────────────────────────────────────────────────
+        # aba Status
         tabs.select("Status")
         fields = tabs.current_explorer().read_fields(
-            "MEPO1232-STATUS02",  # status de liberação (liberado, bloqueado, etc)
-            "txtMEPO1235-VALUE02",  # valor total do pedido
+            "MEPO1232-STATUS02",  # status de liberação
+            "txtMEPO1235-VALUE02",  # valor total
         )
         result["liberado"] = fields.get("MEPO1232-STATUS02")
         result["valor_total"] = parse_sap_float(fields.get("txtMEPO1235-VALUE02"))
 
-        # ── aba Textos ────────────────────────────────────────────────────────
+        # aba Textos
         tabs.select("Textos")
         texto_explorer = tabs.current_explorer()
-        # texto_node = texto_explorer.find_first(type="GuiTextField")
         texto_node = texto_explorer.find_first(
             id_contains="cntlTEXT_EDITOR_0101/shellcont/shell"
         )
@@ -258,11 +232,9 @@ class ME23NScreen(Screen):
             getattr(texto_node, "Text", None) if texto_node else None
         )
 
-        # ── aba Dados do cliente → sub-TabStrip → aba TLC ────────────────────
-        # tlc_tabs usa _ID_TLC_TAB (fixo) — ID estável mesmo após rerenderização,
-        # pois está aninhado dentro de tabpTABHDT11 que já foi selecionado.
+        # aba Dados do cliente → sub-TabStrip → aba TLC
         tabs.select("Dados do cliente")
-        tlc_tabs = TabStrip.from_path(self.session, _ID_TLC_TAB)
+        tlc_tabs = TabStrip.from_path(self.session, ids["tlc_tab"])
         if tlc_tabs.exists("TLC"):
             tlc_tabs.select("TLC")
             tlc_node = tlc_tabs.current_explorer().find_first(
@@ -280,25 +252,17 @@ class ME23NScreen(Screen):
 
     @property
     def items_table(self) -> TableControl:
-        """
-        TableControl da tabela de itens do pedido.
-
-        Usa _ID_TABELA (fixo) — acesso direto sem walk.
-        O validator validate_by_count é necessário pois a tabela tem
-        colunas heterogêneas (nem todas preenchidas em todas as linhas).
-        """
+        """TableControl da tabela de itens — usa prefixo dinâmico."""
+        prefix = self._resolve_prefix()
+        ids = self._build_ids(prefix)
         return TableControl(
             self.session,
-            _ID_TABELA,
+            ids["tabela"],
             column_validator=validate_by_count,
         )
 
     def read_items(self) -> list:
-        """
-        Lê todos os itens da tabela e retorna lista de ItemPedido.
-
-        Faz scroll automático para capturar itens além da área visível.
-        """
+        """Lê todos os itens da tabela e retorna lista de ItemPedido."""
         return parse_me23n_items(self.items_table.to_list())
 
     # ------------------------------------------------------------------
@@ -306,37 +270,14 @@ class ME23NScreen(Screen):
     # ------------------------------------------------------------------
 
     def select_item(self, index: int):
-        """
-        Seleciona um item na tabela para abrir seus detalhes na seção [2].
-
-        Parâmetros
-        ----------
-        index : int — índice do item (0-based)
-        """
+        """Seleciona um item na tabela para abrir seus detalhes."""
         self.items_table.select_row(index)
 
     @property
     def item_tabs(self) -> TabStrip:
-        """
-        TabStrip dos detalhes do item atualmente selecionado.
-
-        Usa from_explorer (modo dinâmico) pois o ID do TabStrip varia
-        conforme o item selecionado. Caso o ID seja verificado como estável,
-        migrar para from_path_with_map para melhor performance.
-
-        Pré-condição: um item deve estar selecionado via select_item().
-        """
+        """TabStrip dos detalhes do item — ID varia conforme item selecionado."""
         return TabStrip.from_explorer(self.explorer, id_contains="tabsITEM_DETAIL")
 
     def item_has_history(self) -> bool:
-        """
-        Verifica se o item selecionado foi pago.
-
-        A presença da aba 'Histórico' nos detalhes do item indica que
-        houve ao menos um pagamento registrado para aquele item.
-
-        Retorna
-        -------
-        bool — True se a aba 'Histórico' existir, False caso contrário.
-        """
+        """True se o item selecionado tiver aba 'Histórico' (foi pago)."""
         return self.item_tabs.exists("Histórico")
